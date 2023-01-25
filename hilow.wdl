@@ -34,8 +34,11 @@ workflow hilow {
         File? chromsizes
         Array[File]? bowtie2index
 
-        # HiC mapping using HiC-Pro
+        # HiC and HiChIP mapping using HiC-Pro
         String ligationsite='GATCGATC'
+
+        # Limit HiC analysis
+        Boolean ashichip = true
 
         # Peak calling parameters using HiChIP_peaks
         Float FDR=0.4
@@ -190,19 +193,19 @@ workflow hilow {
 
     Int number_fastqs = length(fastqfiles_R1)
     scatter (fastqfile_R1 in fastqfiles_R1) { 
-        call fastqsnumber as f_R1 { input : fastqfile=fastqfile_R1, lengthfastqs=number_fastqs }
-        call splitfastqs as s_R1 { input : nreads=f_R1.cal_reads, fastqfile=fastqfile_R1 } 
+        call fastqsnumber as extrapolate_R1 { input : fastqfile=fastqfile_R1, lengthfastqs=number_fastqs }
+        call splitfastqs as validsplit_R1 { input : nreads=extrapolate_R1.cal_reads, fastqfile=fastqfile_R1 } 
     }
 
     scatter (fastqfile_R2 in fastqfiles_R2) { 
-        call fastqsnumber as f_R2 { input : fastqfile=fastqfile_R2, lengthfastqs=number_fastqs }
-        call splitfastqs as s_R2 { input : nreads=f_R2.cal_reads, fastqfile=fastqfile_R2 } 
+        call fastqsnumber as extrapolate_R2 { input : fastqfile=fastqfile_R2, lengthfastqs=number_fastqs }
+        call splitfastqs as validsplit_R2 { input : nreads=extrapolate_R2.cal_reads, fastqfile=fastqfile_R2 } 
     }
 
-    Array[Pair[File, File]] all_fastqfiles = zip(flatten(s_R1.outputfiles), flatten(s_R2.outputfiles))
+    Array[Pair[File, File]] all_fastqfiles = zip(flatten(validsplit_R1.outputfiles), flatten(validsplit_R2.outputfiles))
 
     scatter (eachfastq in all_fastqfiles) {
-        call hichip_align as hichip1 {
+        call hicpro_align as step1hicpro {
             input :
                 hicpro_out=hicpro_output,
                 fastqfile_R1=eachfastq.left,
@@ -214,12 +217,12 @@ workflow hilow {
                 bowtie2index=actual_bowtie2_index
         }
     }
-    call hichip_merge as hichip2 {
+    call hicpro_merge as step2hicpro {
         input :
             hicpro_out=hicpro_output,
-            fastqfiles_R1=flatten(s_R1.outputfiles),
-            fastqfiles_R2=flatten(s_R2.outputfiles),
-            hicpro_align=hichip1.hicpro_align,
+            fastqfiles_R1=flatten(validsplit_R1.outputfiles),
+            fastqfiles_R2=flatten(validsplit_R2.outputfiles),
+            hicpro_align=step1hicpro.hicpro_align,
             ligationsite=ligationsite,
             genomefragment=genomefragment,
             genomename=genomename,
@@ -238,15 +241,15 @@ workflow hilow {
 
         call filterblklist {
             input :
-                length_fastqs=hichip2.length_fastqs,
+                count_fastqs=step2hicpro.count_fastqs,
                 hicpro_out=hicpro_output,
-                hicpro_result=hichip2.hicpro_merge,
+                hicpro_result=step2hicpro.hicpro_merge,
                 blacklist=blacklist_file,
                 chromsizes=actual_chromsizes
         }
     }
 
-    File final_hicpro = select_first([filterblklist.hicpro_filtered, hichip2.hicpro_merge])
+    File final_hicpro = select_first([filterblklist.hicpro_filtered, step2hicpro.hicpro_merge])
 
 ### ---------------------------------------- ###
 ### ------------ S E C T I O N 4 ----------- ###
@@ -255,7 +258,7 @@ workflow hilow {
 
     call converthic {
         input :
-            length_fastqs=hichip2.length_fastqs,
+            count_fastqs=step2hicpro.count_fastqs,
             hicpro_out=hicpro_output,
             pp_directory=pp_directory,
             hicpro_result=final_hicpro,
@@ -269,44 +272,61 @@ workflow hilow {
 ### ------------- Peak Calling ------------- ###
 ### ---------------------------------------- ###
 
-    if ( !defined(loopsAnchor) ){
-        call oneDpeaks {
-            input :
-                length_fastqs=hichip2.length_fastqs,
-                FDR=FDR,
-                hicpro_out=hicpro_output,
-                pp_directory=pp_directory,
-                hicpro_result=final_hicpro,
-                genomefragment=genomefragment,
-                chromsizes=actual_chromsizes,
-                genomename=genomename,
-                sampleid=sampleid
+    String string_peaks = "" #buffer to allow for not running peaks and looping analysis
+    if (ashichip) {
+        if ( !defined(loopsAnchor) ){
+            call oneDpeaks {
+                input :
+                    count_fastqs=step2hicpro.count_fastqs,
+                    FDR=FDR,
+                    hicpro_out=hicpro_output,
+                    pp_directory=pp_directory,
+                    hicpro_result=final_hicpro,
+                    genomefragment=genomefragment,
+                    chromsizes=actual_chromsizes,
+                    genomename=genomename,
+                    sampleid=sampleid
+            }
         }
-    }
 
 ### ---------------------------------------- ###
 ### ------------ S E C T I O N 6 ----------- ###
 ### ------------- Loop Calling ------------- ###
 ### ---------------------------------------- ###
 
-    call twoDloops {
-        input :
-            length_fastqs=hichip2.length_fastqs,
-            FDR=FDR,
-            hicpro_out=hicpro_output,
-            pp_directory=pp_directory,
-            loopBed=select_first([loopsAnchor, oneDpeaks.oneDpeaksbed]),
-            loopsAnchor=loopsAnchor,
-            hicpro_result=final_hicpro,
-            chromsizes=actual_chromsizes,
-            LowDistThr=LowerThreshold,
-            UppDistThr=UpperThreshold,
-            IntType=IntType,
-            loopThreshold_1=loopThreshold_1,
-            loopThreshold_2=loopThreshold_2,
-            loopThreshold_3=loopThreshold_3,
-            genomename=genomename,
-            sampleid=sampleid
+        call twoDloops {
+            input :
+                count_fastqs=step2hicpro.count_fastqs,
+                FDR=FDR,
+                hicpro_out=hicpro_output,
+                pp_directory=pp_directory,
+                loopBed=select_first([loopsAnchor, oneDpeaks.oneDpeaksbed,string_peaks]),
+                loopsAnchor=loopsAnchor,
+                hicpro_result=final_hicpro,
+                chromsizes=actual_chromsizes,
+                LowDistThr=LowerThreshold,
+                UppDistThr=UpperThreshold,
+                IntType=IntType,
+                loopThreshold_1=loopThreshold_1,
+                loopThreshold_2=loopThreshold_2,
+                loopThreshold_3=loopThreshold_3,
+                genomename=genomename,
+                sampleid=sampleid
+        }
+
+        call createjson as hichipjson {
+            input:
+                pp_bw=select_first([oneDpeaks.pp_bw,twoDloops.anchor_bw]),
+                pp_hic=converthic.pp_hic,
+                pp_peaks=twoDloops.pp_peaks,
+                bedloop_1=twoDloops.bedloop_1,
+                bedloop_2=twoDloops.bedloop_2,
+                bedloop_3=twoDloops.bedloop_3,
+                pp_directory=pp_directory,
+                IntType=IntType,
+                genomename=genomename,
+                sampleid=sampleid
+        }
     }
 
 ### ---------------------------------------- ###
@@ -314,18 +334,15 @@ workflow hilow {
 ### ----------- Create JSON File ----------- ###
 ### ---------------------------------------- ###
 
-    call createjson {
-        input:
-            pp_bw=select_first([oneDpeaks.pp_bw,twoDloops.anchor_bw]),
-            pp_hic=converthic.pp_hic,
-            pp_peaks=twoDloops.pp_peaks,
-            bedloop_1=twoDloops.bedloop_1,
-            bedloop_2=twoDloops.bedloop_2,
-            bedloop_3=twoDloops.bedloop_3,
-            pp_directory=pp_directory,
-            IntType=IntType,
-            genomename=genomename,
-            sampleid=sampleid
+    if (! ashichip) {
+        call createjson as hicjson {
+            input:
+                pp_hic=converthic.pp_hic,
+                pp_directory=pp_directory,
+                IntType=IntType,
+                genomename=genomename,
+                sampleid=sampleid
+        }
     }
 
 ### ---------------------------------------- ###
@@ -334,8 +351,9 @@ workflow hilow {
 ### ---------------------------------------- ###
 
     output {
-        File? jsonfile = createjson.out_json
-        File? hicpro_tar = final_hicpro
+        File? hichipjsonfile = hichipjson.out_json
+        File? hicjsonfile = hicjson.out_json
+        File? hicpro_zip = select_first([filterblklist.hicpro_filtered_zip, step2hicpro.hicpro_zip])
         File? hicfile = converthic.hic_file
         File? peaksbw = oneDpeaks.oneDpeaksbw
         File? peaksbdg = oneDpeaks.oneDpeaksbdg
@@ -444,7 +462,7 @@ task splitfastqs {
     }
 }
 
-task hichip_align {
+task hicpro_align {
     # Perform HiC-Pro step 1: mapping and filtering
     input {
         File fastqfile_R1
@@ -508,7 +526,7 @@ task hichip_align {
             cd ~{hicpro_out}
             bash HiCPro_step1_.sh
 
-            if [ -s $pwd/~{hicpro_out}/hic_results/data/fastq/$newfastqname_edit"_"~{genomename}.bwt2pairs.validPairs ]; then
+            if [ -f $pwd/~{hicpro_out}/hic_results/data/fastq/$newfastqname_edit"_"~{genomename}.bwt2pairs.validPairs ]; then
                 # removing not neccessary files
                 rm rawdata HiCPro_step1_.sh HiCPro_step2_.sh inputfiles_.txt config-hicpro.txt
 
@@ -543,7 +561,7 @@ task hichip_align {
     }
 }
 
-task hichip_merge {
+task hicpro_merge {
     # Perform HiC-Pro step 2: merging and normalization
     input {
         Array[File] fastqfiles_R1
@@ -610,6 +628,8 @@ task hichip_merge {
         cd $pwd
         tar -cpf ~{basename(hicpro_out)}.tar ~{basename(hicpro_out)}
         echo `date`
+        zip -9r ~{basename(hicpro_out)}.zip ~{basename(hicpro_out)}
+        echo `date`
         #rm -rf $pwd/~{basename(hicpro_out)}
 
 
@@ -623,14 +643,15 @@ task hichip_merge {
     }
     output {
         File hicpro_merge = "~{basename(hicpro_out)}.tar"
-        Int length_fastqs = int_fastqs
+        File hicpro_zip = "~{basename(hicpro_out)}.zip"
+        Int count_fastqs = int_fastqs
     }
 }
 
 task oneDpeaks {
     # Call 1D peaks from  HiC-Pro result using HiChIP-Peaks
     input {
-        Int length_fastqs
+        Int count_fastqs
         File hicpro_result
         File genomefragment
         Float FDR=0.4
@@ -647,7 +668,7 @@ task oneDpeaks {
         Int ncpu = 4
     }
 
-    Int memory_gb = length_fastqs
+    Int memory_gb = count_fastqs
 
     command <<<
         pwd=$(pwd)
@@ -692,7 +713,7 @@ task oneDpeaks {
 task filterblklist {
     # Filter based on BlackList regions
     input {
-        Int length_fastqs
+        Int count_fastqs
         File hicpro_result
         File blacklist
         File chromsizes
@@ -703,7 +724,7 @@ task filterblklist {
         Int ncpu = 1
     }
 
-    Int memory_gb = ceil((length_fastqs * 3) + 10)
+    Int memory_gb = ceil((count_fastqs * 3) + 10)
 
     command <<<
         pwd=$(pwd)
@@ -766,6 +787,7 @@ task filterblklist {
 
         cd $pwd
         tar -cpf ~{hicpro_out}.tar ~{hicpro_out}
+        zip -9r ~{hicpro_out}.zip ~{hicpro_out}
         #rm -rf ~{hicpro_out}
     >>>
 
@@ -777,13 +799,14 @@ task filterblklist {
     }
     output {
         File hicpro_filtered = "~{hicpro_out}.tar"
+        File hicpro_filtered_zip = "~{hicpro_out}.zip"
     }
 }
 
 task twoDloops {
     # Call 2D loops from  HiC-Pro result using FitHiChIP
     input {
-        Int length_fastqs
+        Int count_fastqs
         File hicpro_result
         String genomename
         Float FDR=0.4
@@ -813,7 +836,7 @@ task twoDloops {
         Int ncpu = 4
     }
 
-    Int memory_gb = length_fastqs
+    Int memory_gb = count_fastqs
 
     command <<<
         pwd=$(pwd)
@@ -933,7 +956,7 @@ task twoDloops {
 task converthic {
     # Convert HiC-Pro result to .hic file
     input {
-        Int length_fastqs
+        Int count_fastqs
         File hicpro_result
         File chromsizes
         String hicpro_out = 'HiCProOut'
@@ -947,7 +970,7 @@ task converthic {
         Int ncpu = 1
     }
 
-    Int memory_gb = ceil((length_fastqs * 3) + 10) ###wait for Cas9 to be completed. It was 15
+    Int memory_gb = ceil((count_fastqs * 3) + 10) ###wait for Cas9 to be completed. It was 15
 
     command <<<
         pwd=$(pwd)
@@ -1062,9 +1085,9 @@ task createjson {
         String sampleid_m = if defined(sampleid) then select_first([sampleid,genomename]) + '.' + genomename + '_' else ""
         String pp_directory
         Int IntType=3
-        File pp_bw
+        File? pp_bw
         File pp_hic
-        File pp_peaks
+        File? pp_peaks
         File? bedloop_1
         File? bedloop_2
         File? bedloop_3
@@ -1077,50 +1100,61 @@ task createjson {
 
         cat > ~{sampleid_m}proteinpaint.json <<EOF
         [
+        EOF
+        
+        # if there is peak data
+        pp_bw=~{pp_bw}
+        pp_peaks=~{pp_peaks}
+        if [ -f ~{pp_peaks} ]; then
+            cat >> ~{sampleid_m}proteinpaint.json <<EOF
             {
-                "type":"hicstraw",
-                "name":"~{sampleid + '.'}hic",
-                "mode_arc":false,
-                "mode_hm":true,
-                "file":"~{pp_directory}/~{basename(pp_hic)}",
-                "enzyme":"MboI"
+                "type":"bigwig",
+                "name":"~{sampleid + '.'}Coverage",
+                "file":"~{pp_directory}/${pp_bw##*/}",
+                "scale":{
+                    "auto": 1
+                },
+                "height":50
+            },
+            {
+                "type":"bedj",
+                "name":"~{sampleid + '.'}Anchor",
+                "file":"~{pp_directory}/${pp_peaks##*/}",
+                "stackheight":14,
+                "stackspace":1
             },
         EOF
+        
+        fi
+        
+        #looping files
         for loop in ~{sep=' ' bedloops};
         do
             newloop=${loop##*Qvalue.}
             Qvalue=(${newloop//.~{IntType}/ })
             cat >> ~{sampleid_m}proteinpaint.json <<EOF
             {
-                "type": "hicstraw",
-                "name": "~{sampleid + '.'}$Qvalue",
-                "mode_arc": true,
-                "mode_hm": false,
-                "bedfile": "~{pp_directory}/${loop##*/}",
-                "enzyme": "MboI"
+                "type":"hicstraw",
+                "name":"~{sampleid + '.'}$Qvalue",
+                "mode_arc":true,
+                "mode_hm":false,
+                "bedfile":"~{pp_directory}/${loop##*/}"
             },
         EOF
         done
-        cat >> ~{sampleid_m}proteinpaint.json <<EOF
-            {
-                "type": "bigwig",
-                "name": "~{sampleid + '.'}Coverage",
-                "file": "~{pp_directory}/~{basename(pp_bw)}",
-                "scale": {
-                    "auto": 1
-                },
-                "height": 50
-            },
-            {
-                "type":"bedj",
-                "name":"~{sampleid + '.'}.Anchor",
-                "file":"~{pp_directory}/~{basename(pp_peaks)}",
-                "stackheight":14,
-                "stackspace":1
-            }
 
+        # hic file
+        cat > ~{sampleid_m}proteinpaint.json <<EOF
+            {
+                "type":"hicstraw",
+                "name":"~{sampleid + '.'}hic",
+                "mode_arc":false,
+                "mode_hm":true,
+                "file":"~{pp_directory}/~{basename(pp_hic)}"
+            }
         ]
         EOF
+
 
     >>>
     runtime {
