@@ -526,7 +526,7 @@ task hicpro_align {
             cd ~{hicpro_out}
             bash HiCPro_step1_.sh
 
-            if [ -s $pwd/~{hicpro_out}/hic_results/data/fastq/$newfastqname_edit"_"~{genomename}.bwt2pairs.validPairs ]; then
+            if [ -f $pwd/~{hicpro_out}/hic_results/data/fastq/$newfastqname_edit"_"~{genomename}.bwt2pairs.validPairs ]; then
                 # removing not neccessary files
                 rm rawdata HiCPro_step1_.sh HiCPro_step2_.sh inputfiles_.txt config-hicpro.txt
 
@@ -1100,55 +1100,61 @@ task createjson {
 
         cat > ~{sampleid_m}proteinpaint.json <<EOF
         [
+        EOF
+        
+        # if there is peak data
+        pp_bw=~{pp_bw}
+        pp_peaks=~{pp_peaks}
+        if [ -f ~{pp_peaks} ]; then
+            cat >> ~{sampleid_m}proteinpaint.json <<EOF
             {
-                "type":"hicstraw",
-                "name":"~{sampleid + '.'}hic",
-                "mode_arc":false,
-                "mode_hm":true,
-                "file":"~{pp_directory}/~{basename(pp_hic)}",
-                "enzyme":"MboI"
+                "type":"bigwig",
+                "name":"~{sampleid + '.'}Coverage",
+                "file":"~{pp_directory}/${pp_bw##*/}",
+                "scale":{
+                    "auto": 1
+                },
+                "height":50
+            },
+            {
+                "type":"bedj",
+                "name":"~{sampleid + '.'}Anchor",
+                "file":"~{pp_directory}/${pp_peaks##*/}",
+                "stackheight":14,
+                "stackspace":1
             },
         EOF
+        
+        fi
+        
+        #looping files
         for loop in ~{sep=' ' bedloops};
         do
             newloop=${loop##*Qvalue.}
             Qvalue=(${newloop//.~{IntType}/ })
             cat >> ~{sampleid_m}proteinpaint.json <<EOF
             {
-                "type": "hicstraw",
-                "name": "~{sampleid + '.'}$Qvalue",
-                "mode_arc": true,
-                "mode_hm": false,
-                "bedfile": "~{pp_directory}/${loop##*/}",
-                "enzyme": "MboI"
+                "type":"hicstraw",
+                "name":"~{sampleid + '.'}$Qvalue",
+                "mode_arc":true,
+                "mode_hm":false,
+                "bedfile":"~{pp_directory}/${loop##*/}"
+            },
         EOF
         done
-        if [ -s ~{pp_peaks} ]; then
-            pp_bw = ~{pp_bw}
-            pp_peaks = ~{pp_peaks}
-            cat >> ~{sampleid_m}proteinpaint.json <<EOF
-            },
+
+        # hic file
+        cat > ~{sampleid_m}proteinpaint.json <<EOF
             {
-                "type": "bigwig",
-                "name": "~{sampleid + '.'}Coverage",
-                "file": "~{pp_directory}/${pp_bw##*/}",
-                "scale": {
-                    "auto": 1
-                },
-                "height": 50
-            },
-            {
-                "type":"bedj",
-                "name":"~{sampleid + '.'}.Anchor",
-                "file":"~{pp_directory}/${pp_peaks##*/}",
-                "stackheight":14,
-                "stackspace":1
+                "type":"hicstraw",
+                "name":"~{sampleid + '.'}hic",
+                "mode_arc":false,
+                "mode_hm":true,
+                "file":"~{pp_directory}/~{basename(pp_hic)}"
             }
-        EOF
-        fi
-        cat >> ~{sampleid_m}proteinpaint.json <<EOF
         ]
         EOF
+
 
     >>>
     runtime {
