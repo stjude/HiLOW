@@ -23,7 +23,7 @@ workflow hilow {
         # Required Inputs
         Array[File] fastqfiles_R1
         Array[File] fastqfiles_R2
-        File genomefragment
+        File? genomefragment
         String genomename = 'hg19'
 
         # Optional Inputs
@@ -35,7 +35,7 @@ workflow hilow {
         Array[File]? bowtie2index
 
         # HiC and HiChIP mapping using HiC-Pro
-        String ligationsite='GATCGATC'
+        String? ligationsite
 
         # Limit HiC analysis
         Boolean ashichip = true
@@ -72,7 +72,7 @@ workflow hilow {
         }
         genomename: {
             description: 'Reference Genome Name',
-            help: 'Reference genome name. Default: hg19. Choices: hg19, mm10, mm9',
+            help: 'Reference genome name. Default: hg19. Examples: hg19, mm10, mm9',
             example: 'hg19'
         }
         hicpro_output: {
@@ -148,6 +148,21 @@ workflow hilow {
     if (IntType != 1 && IntType != 3) {
         call raise_exception as error_wrong_IntType { input: msg = 'Type of interaction reported by FitHiChIP. Choices: 1 (peak to peak) or 3 (peak to all). Default = 3'}
     }
+
+    if (ashichip && (!defined(genomefragment) || !defined(ligationsite))){
+        call raise_exception as error_missing_data { input: msg = 'Genome Fragment file and/or Ligation sites are not specified for HiChIP peak calling, set "ashichip" to False' }
+    }
+    
+    # if (ashichip && !defined(genomefragment)) {
+    #     call raise_exception as error_missing_fragments  { 
+    #         input: msg = 'Genome Fragments file is not specified for HiChiP peak calling, set ashichip to False'
+    #     }
+    # }
+    # if (ashichip && !defined(ligationsite)) {
+    #     call raise_exception as error_missing_ligationsite  { 
+    #         input: msg = 'Ligation sites are not specified for HiChiP peak calling, set ashichip to False'
+    #     }
+    # }
 
     # Generating INDEX files
     String string_reference = ""
@@ -468,9 +483,9 @@ task hicpro_align {
         File fastqfile_R1
         File fastqfile_R2
         File chromsizes
-        File genomefragment
+        File? genomefragment
         String genomename
-        String ligationsite='GATCGATC'
+        String? ligationsite
         Array[File] bowtie2index
         String hicpro_out = 'HiCProOut'
 
@@ -485,26 +500,42 @@ task hicpro_align {
         pwd=$(pwd)
 
         newfastqname=~{sub(basename(fastqfile_R1),'.fastq|.fq|.fastq.gz|.fq.gz','')}
-        echo "$newfastqname"
         newfastqname_edit="${newfastqname/_R1/}"
-        #newfastqname_edit=$my_arr
-        echo "$newfastqname_edit"
 
         config=~{basename(fastqfile_R1)}.tar
         cp /data/config-hicpro.txt config-hicpro.txt
-        GFragment=$pwd/~{sub(basename(genomefragment),'.gz','')}
-        if [[ "~{genomefragment}" == *"gz" ]]; then
-            gunzip -c ~{genomefragment} > ~{sub(basename(genomefragment),'.gz','')}
+
+        # Allow for Genome Fragment to not be specified
+        assignfragment = ~{genomefragment}
+        if [ -f $assignfragment ]; then
+            fragment_filename = ${assignfragment##*/}
+            GFragment=$pwd/${fragment_filename%.gz}
+            if [[ "~{genomefragment}" == *"gz" ]]; then
+                gunzip -c ~{genomefragment} > ${fragment_filename%.gz}
+            else
+                ln -s ~{genomefragment} ${fragment_filename%.gz}
+            fi
+            genomefragment=$GFragment; genomefragment="${genomefragment//\//\\/}"
         else
-           ln -s ~{genomefragment} ~{sub(basename(genomefragment),'.gz','')}
+            genomefragment="";
         fi
 
+        # Allow for Ligation Site to not be specified
+        ligationsite=~{ligationsite}
+        
+        # Make sure Min_Cis_Dist is set when "Fragments" and "Ligation Sites" are not specified
+        if [ ${#ligationsite} < 1 && -f ~{genomefragment} ]; then
+            sed -i "s/MIN_CIS_DIST\ \=\ /MIN_CIS_DIST\ \=\ 1000/" config-hicpro.txt
+        fi
+        
+        
         index_path=~{bowtie2index[0]}; index_path=${index_path%/*}; index_path="${index_path//\//\\/}"
-        sed -i "s/Xbowtieindex/${index_path}/" config-hicpro.txt
-        genomefragment=$GFragment; genomefragment="${genomefragment//\//\\/}"
-        sed -i "s/Xgenomefragment/${genomefragment}/" config-hicpro.txt
-        sed -i "s/GATCGATC/~{ligationsite}/" config-hicpro.txt
         chromsizes=~{chromsizes}; chromsizes="${chromsizes//\//\\/}"
+
+        #Changes to the config file
+        sed -i "s/Xbowtieindex/${index_path}/" config-hicpro.txt
+        sed -i "s/Xgenomefragment/${genomefragment}/" config-hicpro.txt
+        sed -i "s/GATCGATC/${ligationsite}/" config-hicpro.txt
         sed -i "s/Xchromsizes/${chromsizes}/" config-hicpro.txt
         sed -i "s/Xgenome/~{genomename}/" config-hicpro.txt
 
@@ -561,6 +592,7 @@ task hicpro_align {
     }
 }
 
+
 task hicpro_merge {
     # Perform HiC-Pro step 2: merging and normalization
     input {
@@ -568,9 +600,9 @@ task hicpro_merge {
         Array[File] fastqfiles_R2
         Array[File] hicpro_align
         File chromsizes
-        File genomefragment
+        File? genomefragment
         String genomename
-        String ligationsite='GATCGATC'
+        String? ligationsite
         Array[File] bowtie2index
         String hicpro_out = 'HiCProOut'
 
@@ -585,19 +617,39 @@ task hicpro_merge {
         # Update Config File
         pwd=$(pwd)
         cp /data/config-hicpro.txt config-hicpro.txt
-        GFragment=$pwd/~{sub(basename(genomefragment),'.gz','')}
-        if [[ "~{genomefragment}" == *"gz" ]]; then
-            gunzip -c ~{genomefragment} > ~{sub(basename(genomefragment),'.gz','')}
+
+
+        # Allow for Genome Fragment to not be specified
+        assignfragment = ~{genomefragment}
+        if [ -f $assignfragment ]; then
+            fragment_filename = ${assignfragment##*/}
+            GFragment=$pwd/${fragment_filename%.gz}
+            if [[ "~{genomefragment}" == *"gz" ]]; then
+                gunzip -c ~{genomefragment} > ${fragment_filename%.gz}
+            else
+                ln -s ~{genomefragment} ${fragment_filename%.gz}
+            fi
+            genomefragment=$GFragment; genomefragment="${genomefragment//\//\\/}"
         else
-           ln -s ~{genomefragment} ~{sub(basename(genomefragment),'.gz','')}
+            genomefragment="";
         fi
 
+        # Allow for Ligation Site to not be specified
+        ligationsite=~{ligationsite}
+        
+        # Make sure Min_Cis_Dist is set when "Fragments" and "Ligation Sites" are not specified
+        if [ ${#ligationsite} < 1 && -f ~{genomefragment} ]; then
+            sed -i "s/MIN_CIS_DIST\ \=\ /MIN_CIS_DIST\ \=\ 1000/" config-hicpro.txt
+        fi
+        
+        
         index_path=~{bowtie2index[0]}; index_path=${index_path%/*}; index_path="${index_path//\//\\/}"
-        sed -i "s/Xbowtieindex/${index_path}/" config-hicpro.txt
-        genomefragment=$GFragment; genomefragment="${genomefragment//\//\\/}"
-        sed -i "s/Xgenomefragment/${genomefragment}/" config-hicpro.txt
-        sed -i "s/GATCGATC/~{ligationsite}/" config-hicpro.txt
         chromsizes=~{chromsizes}; chromsizes="${chromsizes//\//\\/}"
+
+        #Changes to the config file
+        sed -i "s/Xbowtieindex/${index_path}/" config-hicpro.txt
+        sed -i "s/Xgenomefragment/${genomefragment}/" config-hicpro.txt
+        sed -i "s/GATCGATC/${ligationsite}/" config-hicpro.txt
         sed -i "s/Xchromsizes/${chromsizes}/" config-hicpro.txt
         sed -i "s/Xgenome/~{genomename}/" config-hicpro.txt
 
@@ -627,7 +679,6 @@ task hicpro_merge {
         echo `date`
         cd $pwd
         tar -cpf ~{basename(hicpro_out)}.tar ~{basename(hicpro_out)}
-        echo `date`
         zip -9r ~{basename(hicpro_out)}.zip ~{basename(hicpro_out)}
         echo `date`
         #rm -rf $pwd/~{basename(hicpro_out)}
@@ -653,7 +704,7 @@ task oneDpeaks {
     input {
         Int count_fastqs
         File hicpro_result
-        File genomefragment
+        File? genomefragment
         Float FDR=0.4
         File chromsizes
         String genomename
@@ -675,15 +726,22 @@ task oneDpeaks {
         mkdir -p ~{outdir} ~{pp_directory}
         tar -xpf ~{hicpro_result}
 
-        if [[ "~{genomefragment}" == *"gz" ]]; then
-            gunzip -c ~{genomefragment} > ~{sub(basename(genomefragment),'.gz','')}
+        # Allow for Genome Fragment to not be specified
+        assignfragment = ~{genomefragment}
+        if [ -f $assignfragment ]; then
+            fragment_filename = ${assignfragment##*/}
+            GFragment=$pwd/${fragment_filename%.gz}
+            if [[ "~{genomefragment}" == *"gz" ]]; then
+                gunzip -c ~{genomefragment} > ${fragment_filename%.gz}
+            else
+                ln -s ~{genomefragment} ${fragment_filename%.gz}
+            fi
+            genomefragment=$GFragment; genomefragment="${genomefragment//\//\\/}"
         else
-           ln -s ~{genomefragment} ~{sub(basename(genomefragment),'.gz','')}
+            genomefragment="";
         fi
 
-        GFragment=$pwd/~{sub(basename(genomefragment),'.gz','')}
-        
-        peak_call -i ~{hicpro_out}/hic_results/data/fastq -o ~{outdir} -r ${GFragment} -f ~{FDR} -a ~{chromsizes}
+        peak_call -i ~{hicpro_out}/hic_results/data/fastq -o ~{outdir} -r $genomefragment -f ~{FDR} -a ~{chromsizes}
 
         cd ~{outdir}
         LC_COLLATE=C sort -k1,1 -k2,2n fastqbedgraph.bdg > fastqbedgraph.sorted.bdg
@@ -857,7 +915,7 @@ task twoDloops {
         cd $pwd/~{loopOut}
         if [[ $Flag == "bedpe" ]];then
             Output=Anchor/~{sampleid_m}$InputFile
-            awk -F '\t' -v OFS='\t' '{print $1,$2,$3,$4,$5,$6,$7"\n"$4,$5,$6,$1,$2,$3,$7}' ~{loopBed} |sort -k1,1 -k2,2n > $Output
+            awk -F '\t' -v OFS='\t' '{print $1,$2,$3,$4,$5,$6,$7"\n"$4,$5,$6,$1,$2,$3,$7}' ~{loopBed} | sort -k1,1 -k2,2n > $Output
         elif [[ $Flag == "bed" ]];then
             Output=Anchor/~{sampleid_m}$InputFile
             sort -k1,1 -k2,2n ~{loopBed} |cut -f 1-3  > $Output
