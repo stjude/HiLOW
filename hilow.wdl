@@ -454,6 +454,17 @@ task splitfastqs {
         prefix=~{prefix}
         prefix=${prefix%.f*q*}
 
+        #making sure paired reads are R1 and R2.
+        if [[ $prefix != *"_R1_0"* ]]; then
+            if [[ $prefix != *"_R2_0"* ]]; then
+                if [[ $prefix == *"_1"* ]]; then
+                    prefix=${prefix/_1/_R1}
+                elif [[ $prefix == *"_2"* ]]; then
+                    prefix=${prefix/_2/_R2}
+                fi
+            fi
+        fi
+
         nlines=$(echo "~{nreads} * 4" | bc)
 
         if [[ "~{fastqfile}" == *"gz" ]]; then
@@ -499,16 +510,16 @@ task hicpro_align {
         mkdir temp
         pwd=$(pwd)
 
-        newfastqname=~{sub(basename(fastqfile_R1),'.fastq|.fq|.fastq.gz|.fq.gz','')}
-        newfastqname_edit="${newfastqname/_R1/}"
-
         config=~{basename(fastqfile_R1)}.tar
         cp /data/config-hicpro.txt config-hicpro.txt
 
+        newfastqname=~{sub(basename(fastqfile_R1),'.fastq|.fq|.fastq.gz|.fq.gz','')}
+        newfastqname_edit="${newfastqname/_R1/}"
+
         # Allow for Genome Fragment to not be specified
-        assignfragment = ~{genomefragment}
+        assignfragment=~{genomefragment}
         if [ -f $assignfragment ]; then
-            fragment_filename = ${assignfragment##*/}
+            fragment_filename=${assignfragment##*/}
             GFragment=$pwd/${fragment_filename%.gz}
             if [[ "~{genomefragment}" == *"gz" ]]; then
                 gunzip -c ~{genomefragment} > ${fragment_filename%.gz}
@@ -524,18 +535,20 @@ task hicpro_align {
         ligationsite=~{ligationsite}
         
         # Make sure Min_Cis_Dist is set when "Fragments" and "Ligation Sites" are not specified
-        if [ ${#ligationsite} < 1 && -f ~{genomefragment} ]; then
+        if [[ ${#ligationsite} -le 1 ]] && [ ! -f ~{genomefragment} ] ; then 
             sed -i "s/MIN_CIS_DIST\ \=\ /MIN_CIS_DIST\ \=\ 1000/" config-hicpro.txt
+            sed -i "s/Xgenomefragment/${genomefragment}/" config-hicpro.txt
+            sed -i "s/GATCGATC/${ligationsite}/" config-hicpro.txt
+        else
+            sed -i "s/Xgenomefragment/${genomefragment}/" config-hicpro.txt
+            sed -i "s/GATCGATC/${ligationsite}/" config-hicpro.txt
         fi
-        
         
         index_path=~{bowtie2index[0]}; index_path=${index_path%/*}; index_path="${index_path//\//\\/}"
         chromsizes=~{chromsizes}; chromsizes="${chromsizes//\//\\/}"
 
         #Changes to the config file
         sed -i "s/Xbowtieindex/${index_path}/" config-hicpro.txt
-        sed -i "s/Xgenomefragment/${genomefragment}/" config-hicpro.txt
-        sed -i "s/GATCGATC/${ligationsite}/" config-hicpro.txt
         sed -i "s/Xchromsizes/${chromsizes}/" config-hicpro.txt
         sed -i "s/Xgenome/~{genomename}/" config-hicpro.txt
 
@@ -568,21 +581,16 @@ task hicpro_align {
                 tar -cpf ~{basename(fastqfile_R1)}.tar ~{basename(fastqfile_R1)}
 
             else 
-                echo -e 'code error: Can not find valid pairs. Failed to align FASTQs using HiCPro.'
+                echo -e 'hilow error: Can not find valid pairs. Failed to align FASTQs using HiCPro.'
             fi
         
-            # Compress Alignment Results
-            cd $pwd
-            mkdir ~{basename(fastqfile_R1)}
-            mv ~{hicpro_out} ~{basename(fastqfile_R1)}
-            tar -cpf ~{basename(fastqfile_R1)}.tar ~{basename(fastqfile_R1)}
         else
-            echo -e 'error: ~{hicpro_out} folder was not created'
+            echo -e 'hilow error: ~{hicpro_out} folder was not created'
         fi
     >>>
 
     runtime {
-        memory: memory_gb + " GB"
+        memory: ceil(memory_gb * ncpu) + " GB"
         maxRetries: max_retries
         docker: 'ghcr.io/stjude/abralab/hilow:v1.0'
         cpu: ncpu
@@ -610,7 +618,7 @@ task hicpro_merge {
         Int ncpu = 1
     }
 
-    Int memory_gb = ceil((length(fastqfiles_R1) * 3)) # memory is the cube of number of split fastqs (which = <= 90)
+    Int memory_gb = ceil(length(fastqfiles_R1) * 8 ) # memory is times 3 of number of split fastqs (which = <= 90)
     Int int_fastqs = length(fastqfiles_R1) #number of split fastqs
 
     command <<<
@@ -618,11 +626,10 @@ task hicpro_merge {
         pwd=$(pwd)
         cp /data/config-hicpro.txt config-hicpro.txt
 
-
         # Allow for Genome Fragment to not be specified
-        assignfragment = ~{genomefragment}
+        assignfragment=~{genomefragment}
         if [ -f $assignfragment ]; then
-            fragment_filename = ${assignfragment##*/}
+            fragment_filename=${assignfragment##*/}
             GFragment=$pwd/${fragment_filename%.gz}
             if [[ "~{genomefragment}" == *"gz" ]]; then
                 gunzip -c ~{genomefragment} > ${fragment_filename%.gz}
@@ -638,18 +645,18 @@ task hicpro_merge {
         ligationsite=~{ligationsite}
         
         # Make sure Min_Cis_Dist is set when "Fragments" and "Ligation Sites" are not specified
-        if [ ${#ligationsite} < 1 && -f ~{genomefragment} ]; then
+        if [[ ${#ligationsite} -le 1 ]] && [ ! -f ~{genomefragment} ] ; then 
             sed -i "s/MIN_CIS_DIST\ \=\ /MIN_CIS_DIST\ \=\ 1000/" config-hicpro.txt
+        else
+            sed -i "s/Xgenomefragment/${genomefragment}/" config-hicpro.txt
+            sed -i "s/GATCGATC/${ligationsite}/" config-hicpro.txt
         fi
-        
         
         index_path=~{bowtie2index[0]}; index_path=${index_path%/*}; index_path="${index_path//\//\\/}"
         chromsizes=~{chromsizes}; chromsizes="${chromsizes//\//\\/}"
 
         #Changes to the config file
         sed -i "s/Xbowtieindex/${index_path}/" config-hicpro.txt
-        sed -i "s/Xgenomefragment/${genomefragment}/" config-hicpro.txt
-        sed -i "s/GATCGATC/${ligationsite}/" config-hicpro.txt
         sed -i "s/Xchromsizes/${chromsizes}/" config-hicpro.txt
         sed -i "s/Xgenome/~{genomename}/" config-hicpro.txt
 
@@ -679,7 +686,7 @@ task hicpro_merge {
         echo `date`
         cd $pwd
         tar -cpf ~{basename(hicpro_out)}.tar ~{basename(hicpro_out)}
-        zip -9r ~{basename(hicpro_out)}.zip ~{basename(hicpro_out)}
+        zip -9qr ~{basename(hicpro_out)}.zip ~{basename(hicpro_out)}
         echo `date`
         #rm -rf $pwd/~{basename(hicpro_out)}
 
@@ -727,20 +734,21 @@ task oneDpeaks {
         tar -xpf ~{hicpro_result}
 
         # Allow for Genome Fragment to not be specified
-        assignfragment = ~{genomefragment}
+        assignfragment=~{genomefragment}
         if [ -f $assignfragment ]; then
-            fragment_filename = ${assignfragment##*/}
+            fragment_filename=${assignfragment##*/}
             GFragment=$pwd/${fragment_filename%.gz}
             if [[ "~{genomefragment}" == *"gz" ]]; then
                 gunzip -c ~{genomefragment} > ${fragment_filename%.gz}
             else
                 ln -s ~{genomefragment} ${fragment_filename%.gz}
             fi
-            genomefragment=$GFragment; genomefragment="${genomefragment//\//\\/}"
+            genomefragment=$GFragment;
         else
             genomefragment="";
         fi
 
+        echo this is genomefragment $genomefragment
         peak_call -i ~{hicpro_out}/hic_results/data/fastq -o ~{outdir} -r $genomefragment -f ~{FDR} -a ~{chromsizes}
 
         cd ~{outdir}
@@ -845,7 +853,7 @@ task filterblklist {
 
         cd $pwd
         tar -cpf ~{hicpro_out}.tar ~{hicpro_out}
-        zip -9r ~{hicpro_out}.zip ~{hicpro_out}
+        zip -9qr ~{hicpro_out}.zip ~{hicpro_out}
         #rm -rf ~{hicpro_out}
     >>>
 
@@ -1028,7 +1036,7 @@ task converthic {
         Int ncpu = 1
     }
 
-    Int memory_gb = ceil((count_fastqs * 3) + 10) ###wait for Cas9 to be completed. It was 15
+    Int memory_gb = ceil(count_fastqs * 5) ###wait for Cas9 to be completed. It was 15
 
     command <<<
         pwd=$(pwd)
