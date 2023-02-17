@@ -376,6 +376,7 @@ workflow hilow {
         File? peakslog = oneDpeaks.oneDpeakslog
         File? peaksreport = oneDpeaks.oneDpeaksreport
         File? fithichip_tar = twoDloops.twoDloops_tar
+        File? fithichip_zip = twoDloops.twoDloops_zip
         File? anchor_bw = twoDloops.anchor_bw
         File? pp_bw = oneDpeaks.pp_bw
         File? pp_hic = converthic.pp_hic
@@ -997,6 +998,7 @@ task twoDloops {
 
         cd $pwd
         tar -cpf ~{loopOut}.tar ~{loopOut}
+        zip -9qr ~{loopOut}.zip ~{loopOut}
         #rm -rf $pwd/~{loopOut}
 
     >>>
@@ -1009,6 +1011,7 @@ task twoDloops {
     }
     output {
         File twoDloops_tar = "~{loopOut}.tar"
+        File twoDloops_zip = "~{loopOut}.zip"
         File pp_peaks="~{pp_directory}/~{sampleid_m}~{input_loopBed}.gz"
         File pp_tbi="~{pp_directory}/~{sampleid_m}~{input_loopBed}.gz.tbi"
         File? anchor_bw = "~{pp_directory}/{bw_loopBed}.bw"
@@ -1212,7 +1215,7 @@ task createjson {
         done
 
         # hic file
-        cat > ~{sampleid_m}proteinpaint.json <<EOF
+        cat >> ~{sampleid_m}proteinpaint.json <<EOF
             {
                 "type":"hicstraw",
                 "name":"~{sampleid + '.'}hic",
