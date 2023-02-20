@@ -376,6 +376,7 @@ workflow hilow {
         File? peakslog = oneDpeaks.oneDpeakslog
         File? peaksreport = oneDpeaks.oneDpeaksreport
         File? fithichip_tar = twoDloops.twoDloops_tar
+        File? fithichip_zip = twoDloops.twoDloops_zip
         File? anchor_bw = twoDloops.anchor_bw
         File? pp_bw = oneDpeaks.pp_bw
         File? pp_hic = converthic.pp_hic
@@ -518,7 +519,7 @@ task hicpro_align {
 
         # Allow for Genome Fragment to not be specified
         assignfragment=~{genomefragment}
-        if [ -f $assignfragment ]; then
+        if [[ ${#assignfragment} -ge 1 ]] && [ -f $assignfragment ]; then
             fragment_filename=${assignfragment##*/}
             GFragment=$pwd/${fragment_filename%.gz}
             if [[ "~{genomefragment}" == *"gz" ]]; then
@@ -535,8 +536,8 @@ task hicpro_align {
         ligationsite=~{ligationsite}
         
         # Make sure Min_Cis_Dist is set when "Fragments" and "Ligation Sites" are not specified
-        if [[ ${#ligationsite} -le 1 ]] && [ ! -f ~{genomefragment} ] ; then 
-            sed -i "s/MIN_CIS_DIST\ \=\ /MIN_CIS_DIST\ \=\ 1000/" config-hicpro.txt
+        if [[ ${#ligationsite} -le 1 ]] && [[ ${#assignfragment} -le 1 ]] ; then 
+            sed -i "s/MIN_CIS_DIST\ \=/MIN_CIS_DIST\ \=\ 1000/" config-hicpro.txt
             sed -i "s/Xgenomefragment/${genomefragment}/" config-hicpro.txt
             sed -i "s/GATCGATC/${ligationsite}/" config-hicpro.txt
         else
@@ -615,7 +616,7 @@ task hicpro_merge {
         String hicpro_out = 'HiCProOut'
 
         Int max_retries = 1
-        Int ncpu = 1
+        Int ncpu = 4
     }
 
     Int memory_gb = ceil(length(fastqfiles_R1) * 8 ) # memory is times 3 of number of split fastqs (which = <= 90)
@@ -628,7 +629,7 @@ task hicpro_merge {
 
         # Allow for Genome Fragment to not be specified
         assignfragment=~{genomefragment}
-        if [ -f $assignfragment ]; then
+        if [[ ${#assignfragment} -ge 1 ]] && [ -f $assignfragment ]; then
             fragment_filename=${assignfragment##*/}
             GFragment=$pwd/${fragment_filename%.gz}
             if [[ "~{genomefragment}" == *"gz" ]]; then
@@ -645,8 +646,10 @@ task hicpro_merge {
         ligationsite=~{ligationsite}
         
         # Make sure Min_Cis_Dist is set when "Fragments" and "Ligation Sites" are not specified
-        if [[ ${#ligationsite} -le 1 ]] && [ ! -f ~{genomefragment} ] ; then 
-            sed -i "s/MIN_CIS_DIST\ \=\ /MIN_CIS_DIST\ \=\ 1000/" config-hicpro.txt
+        if [[ ${#ligationsite} -le 1 ]] && [[ ${#assignfragment} -le 1 ]] ; then 
+            sed -i "s/MIN_CIS_DIST\ \=/MIN_CIS_DIST\ \=\ 1000/" config-hicpro.txt
+            sed -i "s/Xgenomefragment/${genomefragment}/" config-hicpro.txt
+            sed -i "s/GATCGATC/${ligationsite}/" config-hicpro.txt
         else
             sed -i "s/Xgenomefragment/${genomefragment}/" config-hicpro.txt
             sed -i "s/GATCGATC/${ligationsite}/" config-hicpro.txt
@@ -995,6 +998,7 @@ task twoDloops {
 
         cd $pwd
         tar -cpf ~{loopOut}.tar ~{loopOut}
+        zip -9qr ~{loopOut}.zip ~{loopOut}
         #rm -rf $pwd/~{loopOut}
 
     >>>
@@ -1007,6 +1011,7 @@ task twoDloops {
     }
     output {
         File twoDloops_tar = "~{loopOut}.tar"
+        File twoDloops_zip = "~{loopOut}.zip"
         File pp_peaks="~{pp_directory}/~{sampleid_m}~{input_loopBed}.gz"
         File pp_tbi="~{pp_directory}/~{sampleid_m}~{input_loopBed}.gz.tbi"
         File? anchor_bw = "~{pp_directory}/{bw_loopBed}.bw"
@@ -1210,7 +1215,7 @@ task createjson {
         done
 
         # hic file
-        cat > ~{sampleid_m}proteinpaint.json <<EOF
+        cat >> ~{sampleid_m}proteinpaint.json <<EOF
             {
                 "type":"hicstraw",
                 "name":"~{sampleid + '.'}hic",
