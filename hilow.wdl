@@ -616,7 +616,7 @@ task hicpro_merge {
         String hicpro_out = 'HiCProOut'
 
         Int max_retries = 1
-        Int ncpu = 1
+        Int ncpu = 4
     }
 
     Int memory_gb = ceil(length(fastqfiles_R1) * 8 ) # memory is times 3 of number of split fastqs (which = <= 90)
