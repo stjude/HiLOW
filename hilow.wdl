@@ -32,6 +32,7 @@ workflow hilow {
         File? reference
         File? blacklist
         File? chromsizes
+        File? loopsAnchor
         Array[File]? bowtie2index
 
         # HiC and HiChIP mapping using HiC-Pro
@@ -40,18 +41,7 @@ workflow hilow {
         # Limit HiC analysis
         Boolean ashichip = true
 
-        # Peak calling parameters using HiChIP_peaks
-        Float FDR=0.4
-
-        # Loop calling parameters using FitHiChip
-        File? loopsAnchor
-        Int LowerThreshold=5000
-        Int UpperThreshold=4000000 
-        Int IntType=3
-        String loopThreshold='0.01,0.05,0.1'
-        Float loopThreshold_1=0.01
-        Float loopThreshold_2=0.05
-        Float loopThreshold_3=0.1
+        
     }
 
     parameter_meta {
@@ -74,11 +64,6 @@ workflow hilow {
             description: 'Reference Genome Name',
             help: 'Reference genome name. Default: hg19. Examples: hg19, mm10, mm9',
             example: 'hg19'
-        }
-        hicpro_output: {
-            description: 'HiC-Pro output name',
-            help: 'Input preferred HiC-Pro output name.',
-            example: 'HiCPro_out'
         }
         reference: {
             description: 'Reference FASTA file',
@@ -106,33 +91,8 @@ workflow hilow {
             description: 'Optional file containing pre-defined set of loop anchors, only the first 3 cols are relevent (Chr,Start, End). 1D peak calling step will skipped if provided',
             patterns: ["*.bed"]
         }
-        FDR: {
-            description: 'False Discovery Rate used to call Peaks using HiChIP-peaks.',
-            help: 'False discovery rate'
-        }
         ligationsite: {
             description: 'Restriction enzyme ligation site used by HiC-Pro'
-        }
-        LowerThreshold: {
-            description: 'Lower distance threshold of interaction between two intervals. Interactions below this distance threshold will not be considered for statistical significance.'
-        }
-        UpperThreshold: {
-            description: 'Upper distance threshold of interaction between two intervals. Interactions above this distance threshold will not be considered for statistical significance.'
-        }
-        IntType: {
-            description: 'Type of interaction (foreground) reported by FitHiChIP.'
-        }
-        loopThreshold_1: {
-            description: 'FDR threshold 1 used to call loops using FitHiChIP.',
-            example: '0.01'
-        }
-        loopThreshold_2: {
-            description: 'FDR threshold 2 used to call loops using FitHiChIP.',
-            example: '0.1'
-        }
-        loopThreshold_3: {
-            description: 'FDR threshold 3 used to call loops using FitHiChIP.',
-            example: '0.01'
         }
     }
 
@@ -141,8 +101,16 @@ workflow hilow {
 ### ------ Pre-process Analysis Files ------ ###
 ### ---------------------------------------- ###
 
-    # HiCPro directory
+    # Required Parameters but not for user inputs
     String hicpro_output = 'HiCPro_out'
+    Float FDR=0.4
+    Int LowerThreshold=5000
+    Int UpperThreshold=4000000 
+    Int IntType=3
+    String loopThreshold='0.01,0.05,0.1'
+    Float loopThreshold_1=0.01
+    Float loopThreshold_2=0.05
+    Float loopThreshold_3=0.1
     
     # IntType is 1 or 3. Default 3
     if (IntType != 1 && IntType != 3) {
@@ -153,20 +121,8 @@ workflow hilow {
         call raise_exception as error_missing_data { input: msg = 'Genome Fragment file and/or Ligation sites are not specified for HiChIP peak calling, set "ashichip" to False' }
     }
     
-    # if (ashichip && !defined(genomefragment)) {
-    #     call raise_exception as error_missing_fragments  { 
-    #         input: msg = 'Genome Fragments file is not specified for HiChiP peak calling, set ashichip to False'
-    #     }
-    # }
-    # if (ashichip && !defined(ligationsite)) {
-    #     call raise_exception as error_missing_ligationsite  { 
-    #         input: msg = 'Ligation sites are not specified for HiChiP peak calling, set ashichip to False'
-    #     }
-    # }
-
     # Generating INDEX files
     String string_reference = ""
-    #File reference_m = select_first[(reference,string_reference)]
     #1. Bowtie INDEX files if not provided
     if ( !defined(bowtie2index) ) {
         # create bowtie index when not provided
@@ -210,11 +166,13 @@ workflow hilow {
     scatter (fastqfile_R1 in fastqfiles_R1) { 
         call fastqsnumber as extrapolate_R1 { input : fastqfile=fastqfile_R1, lengthfastqs=number_fastqs }
         call splitfastqs as validsplit_R1 { input : nreads=extrapolate_R1.cal_reads, fastqfile=fastqfile_R1 } 
+        call fastqc as fastqc_R1 { input : inputfile=fastqfile_R1 }
     }
 
     scatter (fastqfile_R2 in fastqfiles_R2) { 
         call fastqsnumber as extrapolate_R2 { input : fastqfile=fastqfile_R2, lengthfastqs=number_fastqs }
         call splitfastqs as validsplit_R2 { input : nreads=extrapolate_R2.cal_reads, fastqfile=fastqfile_R2 } 
+        call fastqc as fastqc_R2 { input : inputfile=fastqfile_R2 }
     }
 
     Array[Pair[File, File]] all_fastqfiles = zip(flatten(validsplit_R1.outputfiles), flatten(validsplit_R2.outputfiles))
@@ -234,6 +192,7 @@ workflow hilow {
     }
     call hicpro_merge as step2hicpro {
         input :
+            sampleid=sampleid,
             hicpro_out=hicpro_output,
             fastqfiles_R1=flatten(validsplit_R1.outputfiles),
             fastqfiles_R2=flatten(validsplit_R2.outputfiles),
@@ -260,7 +219,9 @@ workflow hilow {
                 hicpro_out=hicpro_output,
                 hicpro_result=step2hicpro.hicpro_merge,
                 blacklist=blacklist_file,
-                chromsizes=actual_chromsizes
+                chromsizes=actual_chromsizes,
+                genomename=genomename,
+                sampleid=sampleid
         }
     }
 
@@ -368,14 +329,14 @@ workflow hilow {
     output {
         File? hichipjsonfile = hichipjson.out_json
         File? hicjsonfile = hicjson.out_json
-        File? hicpro_zip = select_first([filterblklist.hicpro_filtered_zip, step2hicpro.hicpro_zip])
+        File? hicpro_tar = select_first([filterblklist.hicpro_filtered, step2hicpro.hicpro_merge])
         File? hicfile = converthic.hic_file
+        File? qcfiles = step2hicpro.qcfiles
         File? peaksbw = oneDpeaks.oneDpeaksbw
         File? peaksbdg = oneDpeaks.oneDpeaksbdg
         File? peaksbed = oneDpeaks.oneDpeaksbed
         File? peakslog = oneDpeaks.oneDpeakslog
         File? peaksreport = oneDpeaks.oneDpeaksreport
-        File? fithichip_tar = twoDloops.twoDloops_tar
         File? fithichip_zip = twoDloops.twoDloops_zip
         File? anchor_bw = twoDloops.anchor_bw
         File? pp_bw = oneDpeaks.pp_bw
@@ -388,6 +349,10 @@ workflow hilow {
         File? tbiloop_1 = twoDloops.tbiloop_1
         File? tbiloop_2 = twoDloops.tbiloop_2
         File? tbiloop_3 = twoDloops.tbiloop_3
+        Array[File?] fastqchtml_1 = fastqc_R1.htmlfile
+        Array[File?] fastqchtml_2 = fastqc_R2.htmlfile
+        Array[File?] fastqczip_1 = fastqc_R1.zipfile
+        Array[File?] fastqczip_2 = fastqc_R2.zipfile
     }
 }
 
@@ -400,22 +365,15 @@ task fastqsnumber {
     input {
         File fastqfile
         Int lengthfastqs
-
-        Int max_retries = 1
-        Int ncpu = 1
-        Int memory_gb = 5
     }
     
     command <<<
-        maxthreads=$(printf %.0f $(echo "30 / ~{lengthfastqs}" | bc)); echo $maxthreads
+        jobs=30
+        maxthreads=$(printf %.0f $(echo "$jobs / ~{lengthfastqs}" | bc)); echo $maxthreads
         count=$(zcat ~{fastqfile} | wc -l); echo $count
-        # echo "thesting"
-        # ccc=$(echo "$count/(4*$maxthreads)" | bc)
-        # echo $ccc
-        # echo "end test"
         reads=$(printf %.0f $(echo "$count/(4*$maxthreads*1000000)" | bc)); echo $reads
-        if [ $reads -le 10 ]; then 
-            nreads=10000000;
+        if [ $reads -le 50 ]; then 
+            nreads=50000000;
         else 
             nreads=$(echo "$reads * 1000000" | bc) 
         fi
@@ -425,10 +383,10 @@ task fastqsnumber {
     >>>
     
     runtime {
-        memory: ceil(memory_gb * ncpu) + " GB"
-        maxRetries: max_retries
+        memory: "5 GB"
+        maxRetries: 1
         docker: 'ghcr.io/stjude/abralab/hilow:v1.0'
-        cpu: ncpu
+        cpu: 1
     }
     output {
         Int cal_reads = read_int("nreads.txt")
@@ -443,10 +401,6 @@ task splitfastqs {
         Int nreads = 30000000
         String output_location = '_split/fastq'
         String prefix = basename(fastqfile)
-
-        Int max_retries = 1
-        Int ncpu = 1
-        Int memory_gb = 5
     }
 
     command <<<
@@ -455,7 +409,7 @@ task splitfastqs {
         prefix=~{prefix}
         prefix=${prefix%.f*q*}
 
-        #making sure paired reads are R1 and R2.
+        # Making sure paired reads are R1 and R2.
         if [[ $prefix != *"_R1_0"* ]]; then
             if [[ $prefix != *"_R2_0"* ]]; then
                 if [[ $prefix == *"_1"* ]]; then
@@ -479,10 +433,10 @@ task splitfastqs {
     >>>
 
     runtime {
-        memory: ceil(memory_gb * ncpu) + " GB"
-        maxRetries: max_retries
+        memory: "5 GB"
+        maxRetries: 1
         docker: 'ghcr.io/stjude/abralab/hilow:v1.0'
-        cpu: ncpu
+        cpu: 1
     }
     output {
         Array[File] outputfiles = glob("~{output_location}/*.fastq")
@@ -501,9 +455,8 @@ task hicpro_align {
         Array[File] bowtie2index
         String hicpro_out = 'HiCProOut'
 
-        Int max_retries = 1
         Int ncpu = 4
-        Int memory_gb = 10
+        Int memory_gb = 5
     }
 
     command <<<
@@ -548,7 +501,7 @@ task hicpro_align {
         index_path=~{bowtie2index[0]}; index_path=${index_path%/*}; index_path="${index_path//\//\\/}"
         chromsizes=~{chromsizes}; chromsizes="${chromsizes//\//\\/}"
 
-        #Changes to the config file
+        # Changes to the config file
         sed -i "s/Xbowtieindex/${index_path}/" config-hicpro.txt
         sed -i "s/Xchromsizes/${chromsizes}/" config-hicpro.txt
         sed -i "s/Xgenome/~{genomename}/" config-hicpro.txt
@@ -592,7 +545,7 @@ task hicpro_align {
 
     runtime {
         memory: ceil(memory_gb * ncpu) + " GB"
-        maxRetries: max_retries
+        maxRetries: 1
         docker: 'ghcr.io/stjude/abralab/hilow:v1.0'
         cpu: ncpu
     }
@@ -614,9 +567,8 @@ task hicpro_merge {
         String? ligationsite
         Array[File] bowtie2index
         String hicpro_out = 'HiCProOut'
-
-        Int max_retries = 1
-        Int ncpu = 4
+        String? sampleid
+        String sampleid_m = if defined(sampleid) then sampleid + '.' + genomename + '_' else ""
     }
 
     Int memory_gb = ceil(length(fastqfiles_R1) * 8 ) # memory is times 3 of number of split fastqs (which = <= 90)
@@ -658,7 +610,7 @@ task hicpro_merge {
         index_path=~{bowtie2index[0]}; index_path=${index_path%/*}; index_path="${index_path//\//\\/}"
         chromsizes=~{chromsizes}; chromsizes="${chromsizes//\//\\/}"
 
-        #Changes to the config file
+        # Changes to the config file
         sed -i "s/Xbowtieindex/${index_path}/" config-hicpro.txt
         sed -i "s/Xchromsizes/${chromsizes}/" config-hicpro.txt
         sed -i "s/Xgenome/~{genomename}/" config-hicpro.txt
@@ -681,30 +633,33 @@ task hicpro_merge {
 
         # Organize HiCPro File
         cp -R ${file_array[@]} AAA/~{hicpro_out} ./
-        #rm -rf ${file_array} AAA/~{hicpro_out}
         cd ~{hicpro_out}
         bash HiCPro_step2_.sh
 
         # Compress Merge Results
         echo `date`
         cd $pwd
+        rm -rf ${file_array} AAA/~{hicpro_out}
         tar -cpf ~{basename(hicpro_out)}.tar ~{basename(hicpro_out)}
-        zip -9qr ~{basename(hicpro_out)}.zip ~{basename(hicpro_out)}
-        echo `date`
-        #rm -rf $pwd/~{basename(hicpro_out)}
 
+        # Export QCfiles
+        mkdir -p QCfiles
+        cp HiCPro_out/hic_results/pic/fastq/plot* QCfiles
+        cp HiCPro_out/hic_results/stats/fastq/* QCfiles
+        zip -9qr QCfiles.zip QCfiles
+        rm -rf $pwd/~{basename(hicpro_out)}
 
     >>>
 
     runtime {
-        memory: ceil(memory_gb * ncpu) + " GB"
-        maxRetries: max_retries
+        memory: memory_gb + " GB"
+        maxRetries: 1
         docker: 'ghcr.io/stjude/abralab/hilow:v1.0'
-        cpu: ncpu
+        cpu: 1
     }
     output {
         File hicpro_merge = "~{basename(hicpro_out)}.tar"
-        File hicpro_zip = "~{basename(hicpro_out)}.zip"
+        File qcfiles = "QCfiles.zip"
         Int count_fastqs = int_fastqs
     }
 }
@@ -725,11 +680,10 @@ task oneDpeaks {
         String hicpro_out = 'HiCProOut'
         String outdir = 'PeakOut'+ FDR
 
-        Int max_retries = 1
         Int ncpu = 4
     }
 
-    Int memory_gb = count_fastqs
+    Int memory_gb = if (count_fastqs < 5) then ceil(5 * 3) else ceil(count_fastqs * 3)
 
     command <<<
         pwd=$(pwd)
@@ -755,26 +709,30 @@ task oneDpeaks {
         peak_call -i ~{hicpro_out}/hic_results/data/fastq -o ~{outdir} -r $genomefragment -f ~{FDR} -a ~{chromsizes}
 
         cd ~{outdir}
-        LC_COLLATE=C sort -k1,1 -k2,2n fastqbedgraph.bdg > fastqbedgraph.sorted.bdg
-        bedGraphToBigWig fastqbedgraph.sorted.bdg ~{chromsizes} fastqbedgraph.bw
+        cp fastqbedgraph.bdg ~{sampleid_m}fastqbedgraph.bdg
+        cp fastqpeaks.bed ~{sampleid_m}fastqpeaks.bed
+        cp fastqlog.log ~{sampleid_m}fastqlog.log
+        cp fastqreport.pdf ~{sampleid_m}fastqreport.pdf
+        LC_COLLATE=C sort -k1,1 -k2,2n ~{sampleid_m}fastqbedgraph.bdg > ~{sampleid_m}fastqbedgraph.sorted.bdg
+        bedGraphToBigWig ~{sampleid_m}fastqbedgraph.sorted.bdg ~{chromsizes} ~{sampleid_m}fastqbedgraph.bw
 
         #proteinpaint directory
-        cp fastqbedgraph.bw $pwd/~{pp_directory}/~{sampleid_m}fastqbedgraph.bw
+        cp ~{sampleid_m}fastqbedgraph.bw $pwd/~{pp_directory}
         
     >>>
 
     runtime {
-        memory: ceil(memory_gb * 2.5) + " GB"
-        maxRetries: max_retries
+        memory: ceil(memory_gb * ncpu) + " GB"
+        maxRetries: 1
         docker: 'ghcr.io/stjude/abralab/hilow:v1.0'
         cpu: ncpu
     }
     output {
-        File oneDpeaksbw = "~{outdir}/fastqbedgraph.bw"
-        File oneDpeaksbdg = "~{outdir}/fastqbedgraph.bdg"
-        File oneDpeaksbed = "~{outdir}/fastqpeaks.bed"
-        File oneDpeakslog = "~{outdir}/fastqlog.log"
-        File oneDpeaksreport = "~{outdir}/fastqreport.pdf"
+        File oneDpeaksbw = "~{outdir}/~{sampleid_m}fastqbedgraph.bw"
+        File oneDpeaksbdg = "~{outdir}/~{sampleid_m}fastqbedgraph.bdg"
+        File oneDpeaksbed = "~{outdir}/~{sampleid_m}fastqpeaks.bed"
+        File oneDpeakslog = "~{outdir}/~{sampleid_m}fastqlog.log"
+        File oneDpeaksreport = "~{outdir}/~{sampleid_m}fastqreport.pdf"
         File pp_bw = "~{pp_directory}/~{sampleid_m}fastqbedgraph.bw"
     }
 }
@@ -788,9 +746,9 @@ task filterblklist {
         File chromsizes
         Int slop=50
         String hicpro_out = 'HiCProOut'
-
-        Int max_retries = 1
-        Int ncpu = 1
+        String? genomename
+        String? sampleid
+        String sampleid_m = if defined(sampleid) then select_first([sampleid, genomename])+ '.' else ""
     }
 
     Int memory_gb = ceil((count_fastqs * 3) + 10)
@@ -799,11 +757,11 @@ task filterblklist {
         pwd=$(pwd)
         tar -xpf ~{hicpro_result}
 
-        all_valid_pairs=$pwd/~{hicpro_out}/hic_results/data/fastq/fastq.allValidPairs
-        orig_valid_pairs=$pwd/~{hicpro_out}/hic_results/data/fastq/fastq.AVP.Orig
+        all_valid_pairs=$pwd/~{sampleid_m}~{hicpro_out}/hic_results/data/fastq/fastq.allValidPairs
+        orig_valid_pairs=$pwd/~{sampleid_m}~{hicpro_out}/hic_results/data/fastq/fastq.AVP.Orig
         mv $all_valid_pairs $orig_valid_pairs
 
-        cd $pwd/~{hicpro_out}/hic_results/data/fastq
+        cd $pwd/~{sampleid_m}~{hicpro_out}/hic_results/data/fastq
 
         if [[ "~{blacklist}" == *"gz" ]]; then
             gunzip -c ~{blacklist} > ~{sub(basename(blacklist),'.gz','')}
@@ -855,20 +813,20 @@ task filterblklist {
         echo -e "$filtered read pairs are filtered out from a total of $all, accounting for ${percentage} %\n"
 
         cd $pwd
-        tar -cpf ~{hicpro_out}.tar ~{hicpro_out}
-        zip -9qr ~{hicpro_out}.zip ~{hicpro_out}
+        tar -cpf ~{sampleid_m}~{basename(hicpro_out)}.tar ~{sampleid_m}~{hicpro_out}
+        zip -9qr ~{sampleid_m}~{basename(hicpro_out)}.zip ~{sampleid_m}~{hicpro_out}
         #rm -rf ~{hicpro_out}
     >>>
 
     runtime {
-        memory: ceil(memory_gb * ncpu) + " GB"
-        maxRetries: max_retries
+        memory: memory_gb + " GB"
+        maxRetries: 1
         docker: 'ghcr.io/stjude/abralab/hilow:v1.0'
-        cpu: ncpu
+        cpu: 1
     }
     output {
-        File hicpro_filtered = "~{hicpro_out}.tar"
-        File hicpro_filtered_zip = "~{hicpro_out}.zip"
+        File hicpro_filtered = "~{sampleid_m}~{basename(hicpro_out)}.tar"
+        File hicpro_filtered_zip = "~{sampleid_m}~{basename(hicpro_out)}.zip"
     }
 }
 
@@ -897,15 +855,11 @@ task twoDloops {
         String? sampleid
         String sampleid_m = if defined(sampleid) then select_first([sampleid, genomename])+ '.' else ""
 
-        #String outdir = 'PeakOut'+ FDR
         String loopName = if defined(loopsAnchor) then IntType + '.' + FDR + '.' + basename(loopBed,'.bed') + '.' + LowDistThr + '.' + UppDistThr else IntType + '.' + FDR + '.' + LowDistThr + '.' + UppDistThr
         String loopOut = if defined(loopsAnchor) then 'LoopOut_FitHiChIP.' + IntType + '.' + FDR + '.' + basename(loopBed,'.bed') + '.' + LowDistThr + '.' + UppDistThr else 'LoopOut_FitHiChIP.' + IntType + '.' + FDR + '.' + LowDistThr + '.' + UppDistThr
-
-        Int max_retries = 1
-        Int ncpu = 4
     }
 
-    Int memory_gb = count_fastqs
+    Int memory_gb = ceil(count_fastqs * 3)
 
     command <<<
         pwd=$(pwd)
@@ -924,21 +878,25 @@ task twoDloops {
         fi
         
         cd $pwd/~{loopOut}
-        if [[ $Flag == "bedpe" ]];then
+        provided_sampleid = ~{sampleid_m}
+        if [[ -n $provided_sampleid ]] && [[ $InputFile != "~{sampleid_m}"* ]]; then
             Output=Anchor/~{sampleid_m}$InputFile
+        else
+            Output=Anchor/$InputFile
+        fi
+        
+        if [[ $Flag == "bedpe" ]];then
             awk -F '\t' -v OFS='\t' '{print $1,$2,$3,$4,$5,$6,$7"\n"$4,$5,$6,$1,$2,$3,$7}' ~{loopBed} | sort -k1,1 -k2,2n > $Output
         elif [[ $Flag == "bed" ]];then
-            Output=Anchor/~{sampleid_m}$InputFile
             sort -k1,1 -k2,2n ~{loopBed} |cut -f 1-3  > $Output
         elif [[ $Flag == "bw" ]];then
-            Output=Anchor/~{sampleid_m}$InputFile
             cp ~{loopBed} $Output
         fi
 
         bgzip -f $Output
         tabix -f -p bed $Output.gz
 
-        #copy to proteinpaint directory
+        # Copy to proteinpaint directory
         cp $Output.gz{,.tbi} $pwd/~{pp_directory}
 
         config=~{sampleid + "_"}config.txt
@@ -963,7 +921,7 @@ task twoDloops {
         OverWrite=1
         EOF
 
-        #run FitHiChIP
+        # Run FitHiChIP
         /FitHiChIP/FitHiChIP_HiCPro.sh -C $config
 
         if [ ~{IntType} -eq 3 ];then
@@ -983,37 +941,34 @@ task twoDloops {
         echo -e "Get significant loops on $count FDR threholds"
         
         for Qvalue in ${LoopThr_list[@]}; do
-            Output=$LoopDir/$sampleid"Qvalue."$Qvalue.~{loopName}.bed
-            Output2=$LoopDir/$sampleid"Qvalue."$Qvalue.~{loopName}.bedpe
+            Output=$LoopDir/~{sampleid_m}"Qvalue."$Qvalue.~{loopName}.bed
+            Output2=$LoopDir/~{sampleid_m}"Qvalue."$Qvalue.~{loopName}.bedpe
             awk -F '\t' -v OFS='\t' -v Q=$Qvalue '((NR>1) && ($NF<Q)) {print $1,$2,$3,$4,$5,$6,$7}' $LoopAll | sort -k1,1 -k2,2n > $Output2
             awk -F '\t' -v OFS='\t' -v Q=$Qvalue '((NR>1) && ($NF<Q)) {print $1,$2,$3,$4,$5,$6,$7"\n"$4,$5,$6,$1,$2,$3,$7}' $LoopAll | sort -k1,1 -k2,2n > $Output
             bgzip -f $Output
             tabix -f -p bed $Output.gz
 
-            #proteinpaint directory
+            # Copy to specified Proteinpaint directory name
             cp $Output.gz{,.tbi} $pwd/~{pp_directory}
             
             echo -e "processed Qvalue $Qvalue and stored results at $Output"
         done
 
         cd $pwd
-        tar -cpf ~{loopOut}.tar ~{loopOut}
-        zip -9qr ~{loopOut}.zip ~{loopOut}
-        #rm -rf $pwd/~{loopOut}
+        zip -1qr ~{loopOut}.zip ~{loopOut}
 
     >>>
 
     runtime {
         memory: ceil(memory_gb * 3) + " GB"
-        maxRetries: max_retries
+        maxRetries: 1
         docker: 'ghcr.io/stjude/abralab/hilow:v1.0'
-        cpu: ncpu
+        cpu: 4
     }
     output {
-        File twoDloops_tar = "~{loopOut}.tar"
         File twoDloops_zip = "~{loopOut}.zip"
-        File pp_peaks="~{pp_directory}/~{sampleid_m}~{input_loopBed}.gz"
-        File pp_tbi="~{pp_directory}/~{sampleid_m}~{input_loopBed}.gz.tbi"
+        File? pp_peaks="~{pp_directory}/~{sampleid_m}~{input_loopBed}.gz"
+        File? pp_tbi="~{pp_directory}/~{sampleid_m}~{input_loopBed}.gz.tbi"
         File? anchor_bw = "~{pp_directory}/{bw_loopBed}.bw"
         File? bedloop_1="~{pp_directory}/~{sampleid_m}Qvalue.~{loopThreshold_1}.~{loopName}.bed.gz"
         File? bedloop_2="~{pp_directory}/~{sampleid_m}Qvalue.~{loopThreshold_2}.~{loopName}.bed.gz"
@@ -1037,11 +992,9 @@ task converthic {
         String? sampleid
         String sampleid_m = if defined(sampleid) then sampleid + '.' + genomename + '_' else ""
 
-        Int max_retries = 1
-        Int ncpu = 1
     }
 
-    Int memory_gb = ceil(count_fastqs * 5) ###wait for Cas9 to be completed. It was 15
+    Int memory_gb = ceil(count_fastqs * 15)
 
     command <<<
         pwd=$(pwd)
@@ -1052,15 +1005,15 @@ task converthic {
         cd ~{hic_out}
         /HiC-Pro_3.1.0/bin/utils/hicpro2juicebox.sh -i $all_valid_pairs -g ~{chromsizes} -j /usr/local/bin/juicer_tools_1.22.01.jar
 
-        #proteinpaint directory
+        # Copy to proteinpaint directory
         cp fastq.allValidPairs.hic $pwd/~{pp_directory}/~{sampleid_m}fastq.allValidPairs.hic
     >>>
 
     runtime {
-        memory: ceil(memory_gb * ncpu) + " GB"
-        maxRetries: max_retries
+        memory: memory_gb + " GB"
+        maxRetries: 1
         docker: 'ghcr.io/stjude/abralab/hilow:v1.0'
-        cpu: ncpu
+        cpu: 1
     }
     output {
         File hic_file = "~{hic_out}/fastq.allValidPairs.hic"
@@ -1075,8 +1028,6 @@ task bowtie2_index {
         String genomename
 
         Int memory_gb = 20
-        Int max_retries = 1
-        Int ncpu = 1
     }
     command <<<
         if [[ "~{reference}" == *"gz" ]]; then
@@ -1085,13 +1036,13 @@ task bowtie2_index {
            ln -s ~{reference} ~{sub(basename(reference),'.gz','')}
         fi
 
-        bowtie2-build --threads ~{ncpu} ~{sub(basename(reference),'.gz','')} ~{genomename}
+        bowtie2-build --threads 20 ~{sub(basename(reference),'.gz','')} ~{genomename}
     >>>
     runtime {
-        memory: ceil(memory_gb * ncpu) + " GB"
-        maxRetries: max_retries
+        memory: memory_gb + " GB"
+        maxRetries: 1
         docker: 'ghcr.io/stjude/abralab/hilow:v1.0'
-        cpu: ncpu
+        cpu: 20
     }
     output {
         Array[File] bowtie_indexes = glob("*.bt2")
@@ -1104,8 +1055,6 @@ task chrfaidx {
 	    File reference
 
         Int memory_gb = 5
-        Int max_retries = 1
-        Int ncpu = 1
     }
     command <<<
         if [[ "~{reference}" == *"gz" ]]; then
@@ -1119,9 +1068,9 @@ task chrfaidx {
     >>>
     runtime {
         memory: memory_gb + " GB"
-        maxRetries: max_retries
+        maxRetries: 1
         docker: 'ghcr.io/stjude/abralab/hilow:v1.0'
-        cpu: ncpu
+        cpu: 1
     }
     output {
         File faidx_file = "~{sub(basename(reference),'.gz','')}.fai"
@@ -1172,15 +1121,24 @@ task createjson {
         cat > ~{sampleid_m}proteinpaint.json <<EOF
         [
         EOF
+        cat >> ~{sampleid_m}proteinpaint.json <<EOF
+            {
+                "type":"hicstraw",
+                "name":"~{sampleid + '-'}hic",
+                "mode_arc":false,
+                "mode_hm":true,
+                "file":"~{pp_directory}/~{basename(pp_hic)}"
+        EOF
         
         # if there is peak data
         pp_bw=~{pp_bw}
         pp_peaks=~{pp_peaks}
-        if [ -f ~{pp_peaks} ]; then
+        if [ -f "~{pp_peaks}" ]; then
             cat >> ~{sampleid_m}proteinpaint.json <<EOF
+            },
             {
                 "type":"bigwig",
-                "name":"~{sampleid + '.'}Coverage",
+                "name":"~{sampleid + '-'}Coverage",
                 "file":"~{pp_directory}/${pp_bw##*/}",
                 "scale":{
                     "auto": 1
@@ -1189,39 +1147,31 @@ task createjson {
             },
             {
                 "type":"bedj",
-                "name":"~{sampleid + '.'}Anchor",
+                "name":"~{sampleid + '-'}Anchor",
                 "file":"~{pp_directory}/${pp_peaks##*/}",
                 "stackheight":14,
                 "stackspace":1
-            },
         EOF
-        
         fi
         
-        #looping files
+        # Looping files
         for loop in ~{sep=' ' bedloops};
         do
             newloop=${loop##*Qvalue.}
             Qvalue=(${newloop//.~{IntType}/ })
             cat >> ~{sampleid_m}proteinpaint.json <<EOF
+            },
             {
                 "type":"hicstraw",
-                "name":"~{sampleid + '.'}$Qvalue",
+                "name":"~{sampleid + '-'}$Qvalue",
                 "mode_arc":true,
                 "mode_hm":false,
                 "bedfile":"~{pp_directory}/${loop##*/}"
-            },
         EOF
         done
 
         # hic file
         cat >> ~{sampleid_m}proteinpaint.json <<EOF
-            {
-                "type":"hicstraw",
-                "name":"~{sampleid + '.'}hic",
-                "mode_arc":false,
-                "mode_hm":true,
-                "file":"~{pp_directory}/~{basename(pp_hic)}"
             }
         ]
         EOF
@@ -1230,11 +1180,41 @@ task createjson {
     >>>
     runtime {
         memory: "5 GB"
-        maxRetries: 0
+        maxRetries: 1
         docker: 'ghcr.io/stjude/abralab/hilow:v1.0'
         cpu: 1
     }
     output {
         File out_json = "~{pp_directory}/~{sampleid_m}proteinpaint.json"
+    }
+}
+
+task fastqc {
+    input {
+        File inputfile
+        String prefix = sub(basename(inputfile),'.fastq.gz|.fq.gz','')
+        String default_location="FastQC"
+
+        Int memory_gb = 5
+    }
+    command {
+        ln -s ~{inputfile} ~{sub(basename(inputfile),'.bam$','.bam.bam')}
+
+        echo ~{prefix}
+        mkdir -p ~{default_location}
+
+        fastqc \
+            -o ~{default_location} \
+            ~{sub(basename(inputfile),'.bam$','.bam.bam')}
+    }
+    runtime {
+        memory: memory_gb + " GB"
+        maxRetries: 1
+        docker: 'ghcr.io/stjude/abralab/fastqc:v0.11.9'
+        cpu: 1
+    }
+    output {
+        File htmlfile = "~{default_location}/~{prefix}_fastqc.html"
+        File zipfile = "~{default_location}/~{prefix}_fastqc.zip"
     }
 }
