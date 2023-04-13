@@ -2,8 +2,8 @@
 ## Test WDL script using samplefiles provided.
 
 # CROMWELL on St. Jude hpc user directory
-sjhpc_cromwell="/home/madetunj/Modupe/publiclink/cromwell-52.jar"
-lsf_config="/home/madetunj/Modupe/publiclink/lsf.conf"
+sjhpc_cromwell="/home/madetunj/madetunj/publiclink/cromwell-52.jar"
+lsf_config="/home/madetunj/madetunj/publiclink/lsf.conf"
 script="../hilow.wdl"
 
 input="./inputs.json"
