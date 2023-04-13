@@ -372,8 +372,8 @@ task fastqsnumber {
         maxthreads=$(printf %.0f $(echo "$jobs / ~{lengthfastqs}" | bc)); echo $maxthreads
         count=$(zcat ~{fastqfile} | wc -l); echo $count
         reads=$(printf %.0f $(echo "$count/(4*$maxthreads*1000000)" | bc)); echo $reads
-        if [ $reads -le 50 ]; then 
-            nreads=50000000;
+        if [ $reads -le 10 ]; then 
+            nreads=10000000;
         else 
             nreads=$(echo "$reads * 1000000" | bc) 
         fi
