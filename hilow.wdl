@@ -276,7 +276,7 @@ workflow hilow {
                 FDR=FDR,
                 hicpro_out=hicpro_output,
                 pp_directory=pp_directory,
-                loopBed=select_first([loopsAnchor, oneDpeaks.oneDpeaksbed,string_peaks]),
+                loopBed=select_first([loopsAnchor, oneDpeaks.oneDpeaksbed, string_peaks]),
                 loopsAnchor=loopsAnchor,
                 hicpro_result=final_hicpro,
                 chromsizes=actual_chromsizes,
@@ -294,7 +294,7 @@ workflow hilow {
             input:
                 pp_bw=select_first([oneDpeaks.pp_bw,twoDloops.anchor_bw]),
                 pp_hic=converthic.pp_hic,
-                pp_peaks=twoDloops.pp_peaks,
+                pp_peaks=select_first([twoDloops.pp_peaks,twoDloops.pp_peaks2]),
                 bedloop_1=twoDloops.bedloop_1,
                 bedloop_2=twoDloops.bedloop_2,
                 bedloop_3=twoDloops.bedloop_3,
@@ -341,8 +341,8 @@ workflow hilow {
         File? anchor_bw = twoDloops.anchor_bw
         File? pp_bw = oneDpeaks.pp_bw
         File? pp_hic = converthic.pp_hic
-        File? pp_peaks = twoDloops.pp_peaks
-        File? pp_tbi = twoDloops.pp_tbi
+        File? pp_peaks = select_first([twoDloops.pp_peaks,twoDloops.pp_peaks2])
+        File? pp_tbi = select_first([twoDloops.pp_tbi,twoDloops.pp_tbi2])
         File? bedloop_1 = twoDloops.bedloop_1
         File? bedloop_2 = twoDloops.bedloop_2
         File? bedloop_3 = twoDloops.bedloop_3
@@ -747,8 +747,8 @@ task filterblklist {
         Int slop=50
         String hicpro_out = 'HiCProOut'
         String? genomename
-        String? sampleid
-        String sampleid_m = if defined(sampleid) then select_first([sampleid, genomename])+ '.' else ""
+        String? sampleid 
+        String sampleid_m = if defined(sampleid) then sampleid + '.' + genomename + '_' else ""
     }
 
     Int memory_gb = ceil((count_fastqs * 3) + 10)
@@ -853,7 +853,7 @@ task twoDloops {
 
         String pp_directory
         String? sampleid
-        String sampleid_m = if defined(sampleid) then select_first([sampleid, genomename])+ '.' else ""
+        String sampleid_m = if defined(sampleid) then sampleid + '.' + genomename + '_' else ""
 
         String loopName = if defined(loopsAnchor) then IntType + '.' + FDR + '.' + basename(loopBed,'.bed') + '.' + LowDistThr + '.' + UppDistThr else IntType + '.' + FDR + '.' + LowDistThr + '.' + UppDistThr
         String loopOut = if defined(loopsAnchor) then 'LoopOut_FitHiChIP.' + IntType + '.' + FDR + '.' + basename(loopBed,'.bed') + '.' + LowDistThr + '.' + UppDistThr else 'LoopOut_FitHiChIP.' + IntType + '.' + FDR + '.' + LowDistThr + '.' + UppDistThr
@@ -969,6 +969,8 @@ task twoDloops {
         File twoDloops_zip = "~{loopOut}.zip"
         File? pp_peaks="~{pp_directory}/~{sampleid_m}~{input_loopBed}.gz"
         File? pp_tbi="~{pp_directory}/~{sampleid_m}~{input_loopBed}.gz.tbi"
+        File? pp_peaks2="~{pp_directory}/~{input_loopBed}.gz"
+        File? pp_tbi2="~{pp_directory}/~{input_loopBed}.gz.tbi"
         File? anchor_bw = "~{pp_directory}/{bw_loopBed}.bw"
         File? bedloop_1="~{pp_directory}/~{sampleid_m}Qvalue.~{loopThreshold_1}.~{loopName}.bed.gz"
         File? bedloop_2="~{pp_directory}/~{sampleid_m}Qvalue.~{loopThreshold_2}.~{loopName}.bed.gz"
@@ -1102,7 +1104,7 @@ task createjson {
     input {
         String genomename
         String? sampleid
-        String sampleid_m = if defined(sampleid) then select_first([sampleid,genomename]) + '.' + genomename + '_' else ""
+        String sampleid_m = if defined(sampleid) then sampleid + '.' + genomename + '_' else ""
         String pp_directory
         Int IntType=3
         File? pp_bw
