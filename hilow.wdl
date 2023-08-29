@@ -41,7 +41,7 @@ workflow hilow {
         # Limit HiC analysis
         Boolean ashichip = true
 
-        
+
     }
 
     parameter_meta {
@@ -105,13 +105,13 @@ workflow hilow {
     String hicpro_output = 'HiCPro_out'
     Float FDR=0.4
     Int LowerThreshold=5000
-    Int UpperThreshold=4000000 
+    Int UpperThreshold=4000000
     Int IntType=3
     String loopThreshold='0.01,0.05,0.1'
     Float loopThreshold_1=0.01
     Float loopThreshold_2=0.05
     Float loopThreshold_3=0.1
-    
+
     # IntType is 1 or 3. Default 3
     if (IntType != 1 && IntType != 3) {
         call raise_exception as error_wrong_IntType { input: msg = 'Type of interaction reported by FitHiChIP. Choices: 1 (peak to peak) or 3 (peak to all). Default = 3'}
@@ -120,7 +120,7 @@ workflow hilow {
     if (ashichip && (!defined(genomefragment) || !defined(ligationsite))){
         call raise_exception as error_missing_data { input: msg = 'Genome Fragment file and/or Ligation sites are not specified for HiChIP peak calling, set "ashichip" to False' }
     }
-    
+
     # Generating INDEX files
     String string_reference = ""
     #1. Bowtie INDEX files if not provided
@@ -147,7 +147,7 @@ workflow hilow {
         }
     }
     Array[File] actual_bowtie2_index = select_first([bowtie2_index.bowtie_indexes, bowtie2_index_2.bowtie_indexes, bowtie2index])
-    
+
     if (! defined(chromsizes) ){
         call chrfaidx {
             # create FASTA index and chrom sizes files
@@ -163,15 +163,15 @@ workflow hilow {
 ### ---------------------------------------- ###
 
     Int number_fastqs = length(fastqfiles_R1)
-    scatter (fastqfile_R1 in fastqfiles_R1) { 
+    scatter (fastqfile_R1 in fastqfiles_R1) {
         call fastqsnumber as extrapolate_R1 { input : fastqfile=fastqfile_R1, lengthfastqs=number_fastqs }
-        call splitfastqs as validsplit_R1 { input : nreads=extrapolate_R1.cal_reads, fastqfile=fastqfile_R1 } 
+        call splitfastqs as validsplit_R1 { input : nreads=extrapolate_R1.cal_reads, fastqfile=fastqfile_R1 }
         call fastqc as fastqc_R1 { input : inputfile=fastqfile_R1 }
     }
 
-    scatter (fastqfile_R2 in fastqfiles_R2) { 
+    scatter (fastqfile_R2 in fastqfiles_R2) {
         call fastqsnumber as extrapolate_R2 { input : fastqfile=fastqfile_R2, lengthfastqs=number_fastqs }
-        call splitfastqs as validsplit_R2 { input : nreads=extrapolate_R2.cal_reads, fastqfile=fastqfile_R2 } 
+        call splitfastqs as validsplit_R2 { input : nreads=extrapolate_R2.cal_reads, fastqfile=fastqfile_R2 }
         call fastqc as fastqc_R2 { input : inputfile=fastqfile_R2 }
     }
 
@@ -290,11 +290,14 @@ workflow hilow {
                 sampleid=sampleid
         }
 
+        File final_pp_peaks = select_first([twoDloops.pp_peaks, twoDloops.pp_peaks2, string_peaks])
+        File final_pp_tbi = select_first([twoDloops.pp_tbi,twoDloops.pp_tbi2, string_peaks])
+
         call createjson as hichipjson {
             input:
                 pp_bw=select_first([oneDpeaks.pp_bw,twoDloops.anchor_bw]),
                 pp_hic=converthic.pp_hic,
-                pp_peaks=select_first([twoDloops.pp_peaks,twoDloops.pp_peaks2]),
+                pp_peaks=final_pp_peaks,
                 bedloop_1=twoDloops.bedloop_1,
                 bedloop_2=twoDloops.bedloop_2,
                 bedloop_3=twoDloops.bedloop_3,
@@ -303,7 +306,7 @@ workflow hilow {
                 genomename=genomename,
                 sampleid=sampleid
         }
-    }
+    } #end if hichip
 
 ### ---------------------------------------- ###
 ### ------------ S E C T I O N 7 ----------- ###
@@ -319,6 +322,13 @@ workflow hilow {
                 genomename=genomename,
                 sampleid=sampleid
         }
+    }
+
+    call qcreport {
+        input:
+            sampleid=sampleid,
+            genomename=genomename,
+            qczip = select_first([twoDloops.qcfiles, step2hicpro.qcfiles])
     }
 
 ### ---------------------------------------- ###
@@ -341,8 +351,8 @@ workflow hilow {
         File? anchor_bw = twoDloops.anchor_bw
         File? pp_bw = oneDpeaks.pp_bw
         File? pp_hic = converthic.pp_hic
-        File? pp_peaks = select_first([twoDloops.pp_peaks,twoDloops.pp_peaks2])
-        File? pp_tbi = select_first([twoDloops.pp_tbi,twoDloops.pp_tbi2])
+        File? pp_peaks = final_pp_peaks
+        File? pp_tbi = final_pp_tbi
         File? bedloop_1 = twoDloops.bedloop_1
         File? bedloop_2 = twoDloops.bedloop_2
         File? bedloop_3 = twoDloops.bedloop_3
@@ -353,6 +363,7 @@ workflow hilow {
         Array[File?] fastqchtml_2 = fastqc_R2.htmlfile
         Array[File?] fastqczip_1 = fastqc_R1.zipfile
         Array[File?] fastqczip_2 = fastqc_R2.zipfile
+        File? qcreports = qcreport.qcreport
     }
 }
 
@@ -366,22 +377,22 @@ task fastqsnumber {
         File fastqfile
         Int lengthfastqs
     }
-    
+
     command <<<
         jobs=30
         maxthreads=$(printf %.0f $(echo "$jobs / ~{lengthfastqs}" | bc)); echo $maxthreads
         count=$(zcat ~{fastqfile} | wc -l); echo $count
         reads=$(printf %.0f $(echo "$count/(4*$maxthreads*1000000)" | bc)); echo $reads
-        if [ $reads -le 30 ]; then 
+        if [ $reads -le 30 ]; then
             nreads=30000000;
-        else 
-            nreads=$(echo "$reads * 1000000" | bc) 
+        else
+            nreads=$(echo "$reads * 1000000" | bc)
         fi
 
         echo "$count" | bc > totalreads.txt
         echo $nreads > nreads.txt
     >>>
-    
+
     runtime {
         memory: "5 GB"
         maxRetries: 1
@@ -487,9 +498,9 @@ task hicpro_align {
 
         # Allow for Ligation Site to not be specified
         ligationsite=~{ligationsite}
-        
+
         # Make sure Min_Cis_Dist is set when "Fragments" and "Ligation Sites" are not specified
-        if [[ ${#ligationsite} -le 1 ]] && [[ ${#assignfragment} -le 1 ]] ; then 
+        if [[ ${#ligationsite} -le 1 ]] && [[ ${#assignfragment} -le 1 ]] ; then
             sed -i "s/MIN_CIS_DIST\ \=/MIN_CIS_DIST\ \=\ 1000/" config-hicpro.txt
             sed -i "s/Xgenomefragment/${genomefragment}/" config-hicpro.txt
             sed -i "s/GATCGATC/${ligationsite}/" config-hicpro.txt
@@ -497,7 +508,7 @@ task hicpro_align {
             sed -i "s/Xgenomefragment/${genomefragment}/" config-hicpro.txt
             sed -i "s/GATCGATC/${ligationsite}/" config-hicpro.txt
         fi
-        
+
         index_path=~{bowtie2index[0]}; index_path=${index_path%/*}; index_path="${index_path//\//\\/}"
         chromsizes=~{chromsizes}; chromsizes="${chromsizes//\//\\/}"
 
@@ -534,10 +545,10 @@ task hicpro_align {
                 mv ~{hicpro_out} ~{basename(fastqfile_R1)}
                 tar -cpf ~{basename(fastqfile_R1)}.tar ~{basename(fastqfile_R1)}
 
-            else 
+            else
                 echo -e 'hilow error: Can not find valid pairs. Failed to align FASTQs using HiCPro.'
             fi
-        
+
         else
             echo -e 'hilow error: ~{hicpro_out} folder was not created'
         fi
@@ -596,9 +607,9 @@ task hicpro_merge {
 
         # Allow for Ligation Site to not be specified
         ligationsite=~{ligationsite}
-        
+
         # Make sure Min_Cis_Dist is set when "Fragments" and "Ligation Sites" are not specified
-        if [[ ${#ligationsite} -le 1 ]] && [[ ${#assignfragment} -le 1 ]] ; then 
+        if [[ ${#ligationsite} -le 1 ]] && [[ ${#assignfragment} -le 1 ]] ; then
             sed -i "s/MIN_CIS_DIST\ \=/MIN_CIS_DIST\ \=\ 1000/" config-hicpro.txt
             sed -i "s/Xgenomefragment/${genomefragment}/" config-hicpro.txt
             sed -i "s/GATCGATC/${ligationsite}/" config-hicpro.txt
@@ -606,7 +617,7 @@ task hicpro_merge {
             sed -i "s/Xgenomefragment/${genomefragment}/" config-hicpro.txt
             sed -i "s/GATCGATC/${ligationsite}/" config-hicpro.txt
         fi
-        
+
         index_path=~{bowtie2index[0]}; index_path=${index_path%/*}; index_path="${index_path//\//\\/}"
         chromsizes=~{chromsizes}; chromsizes="${chromsizes//\//\\/}"
 
@@ -718,7 +729,7 @@ task oneDpeaks {
 
         #proteinpaint directory
         cp ~{sampleid_m}fastqbedgraph.bw $pwd/~{pp_directory}
-        
+
     >>>
 
     runtime {
@@ -747,7 +758,7 @@ task filterblklist {
         Int slop=50
         String hicpro_out = 'HiCProOut'
         String? genomename
-        String? sampleid 
+        String? sampleid
         String sampleid_m = if defined(sampleid) then sampleid + '.' + genomename + '_' else ""
     }
 
@@ -774,7 +785,7 @@ task filterblklist {
 
         #right bed
         awk -F "\t" -v OFS="\t" '{print $5,$6,$6,$1}' $orig_valid_pairs|slopBed -i stdin -b ~{slop} -g ~{chromsizes}|intersectBed -a stdin -b ~{sub(basename(blacklist),'.gz','')} -u >right.bed
-        
+
 
         cat <(cut -f 4 left.bed) <(cut -f 4 right.bed)|sort -u > filter.pair
 
@@ -876,7 +887,7 @@ task twoDloops {
             LC_COLLATE=C sort -k1,1 -k2,2n ~{bw_loopBed}'.bdg' > ~{bw_loopBed}'.sorted.bdg'
             bedGraphToBigWig ~{bw_loopBed}'.sorted.bdg' ~{chromsizes} ~{bw_loopBed}'.bw'
         fi
-        
+
         cd $pwd/~{loopOut}
         provided_sampleid = ~{sampleid_m}
         if [[ -n $provided_sampleid ]] && [[ $InputFile != "~{sampleid_m}"* ]]; then
@@ -884,7 +895,7 @@ task twoDloops {
         else
             Output=Anchor/$InputFile
         fi
-        
+
         if [[ $Flag == "bedpe" ]];then
             awk -F '\t' -v OFS='\t' '{print $1,$2,$3,$4,$5,$6,$7"\n"$4,$5,$6,$1,$2,$3,$7}' ~{loopBed} | sort -k1,1 -k2,2n > $Output
         elif [[ $Flag == "bed" ]];then
@@ -939,7 +950,7 @@ task twoDloops {
         LoopAll=$LoopDir/FitHiChIP.interactions_FitHiC.bed
 
         echo -e "Get significant loops on $count FDR threholds"
-        
+
         for Qvalue in ${LoopThr_list[@]}; do
             Output=$LoopDir/~{sampleid_m}"Qvalue."$Qvalue.~{loopName}.bed
             Output2=$LoopDir/~{sampleid_m}"Qvalue."$Qvalue.~{loopName}.bedpe
@@ -950,12 +961,17 @@ task twoDloops {
 
             # Copy to specified Proteinpaint directory name
             cp $Output.gz{,.tbi} $pwd/~{pp_directory}
-            
+
             echo -e "processed Qvalue $Qvalue and stored results at $Output"
         done
 
         cd $pwd
         zip -1qr ~{loopOut}.zip ~{loopOut}
+
+        mkdir -p QCfiles
+        cp $pwd/~{hicpro_out}/hic_results/stats/fastq/* QCfiles
+        cp ~{loopBed} $LoopAll $LoopDir/FitHiChIP.interactions_FitHiC_Q0.01.bed QCfiles
+        zip -9qr QCfiles.zip QCfiles
 
     >>>
 
@@ -971,13 +987,14 @@ task twoDloops {
         File? pp_tbi="~{pp_directory}/~{sampleid_m}~{input_loopBed}.gz.tbi"
         File? pp_peaks2="~{pp_directory}/~{input_loopBed}.gz"
         File? pp_tbi2="~{pp_directory}/~{input_loopBed}.gz.tbi"
-        File? anchor_bw = "~{pp_directory}/{bw_loopBed}.bw"
+        File? anchor_bw = "~{pp_directory}/~{bw_loopBed}.bw"
         File? bedloop_1="~{pp_directory}/~{sampleid_m}Qvalue.~{loopThreshold_1}.~{loopName}.bed.gz"
         File? bedloop_2="~{pp_directory}/~{sampleid_m}Qvalue.~{loopThreshold_2}.~{loopName}.bed.gz"
         File? bedloop_3="~{pp_directory}/~{sampleid_m}Qvalue.~{loopThreshold_3}.~{loopName}.bed.gz"
         File? tbiloop_1="~{pp_directory}/~{sampleid_m}Qvalue.~{loopThreshold_1}.~{loopName}.bed.gz.tbi"
         File? tbiloop_2="~{pp_directory}/~{sampleid_m}Qvalue.~{loopThreshold_2}.~{loopName}.bed.gz.tbi"
         File? tbiloop_3="~{pp_directory}/~{sampleid_m}Qvalue.~{loopThreshold_3}.~{loopName}.bed.gz.tbi"
+        File? qcfiles="QCfiles.zip"
     }
 }
 
@@ -1131,7 +1148,7 @@ task createjson {
                 "mode_hm":true,
                 "file":"~{pp_directory}/~{basename(pp_hic)}"
         EOF
-        
+
         # if there is peak data
         pp_bw=~{pp_bw}
         pp_peaks=~{pp_peaks}
@@ -1155,7 +1172,7 @@ task createjson {
                 "stackspace":1
         EOF
         fi
-        
+
         # Looping files
         for loop in ~{sep=' ' bedloops};
         do
@@ -1218,5 +1235,106 @@ task fastqc {
     output {
         File htmlfile = "~{default_location}/~{prefix}_fastqc.html"
         File zipfile = "~{default_location}/~{prefix}_fastqc.zip"
+    }
+}
+
+task qcreport {
+    input {
+        File qczip
+        String genomename
+        String? sampleid
+        String sampleid_m = if defined(sampleid) then sampleid + '.' + genomename + '_' else ""
+
+        Int memory_gb = 5
+    }
+    command <<<
+        pwd=$(pwd)
+        unzip ~{qczip}
+        cd QCfiles
+
+        python <<CODE
+        import os
+        FILES = ["fastq_allValidPairs.mergestat", "fastq.mpairstat", "fastq_R1.mmapstat", "fastq_R2.mmapstat"]
+        VARIABLE = ["valid_interaction", "cis_shortRange", "cis_longRange", "Total_pairs_processed", "Reported_pairs", "total_R2", "mapped_R2", "total_R1", "mapped_R1"]
+        RESULTS = {}
+        for eachfile in FILES:
+            with open(eachfile) as f:
+                for line in f:
+                    array = line.split()
+                    if array[0] in VARIABLE:
+                        RESULTS[array[0]] = int(array[1])
+
+        PERCENTAGES = {}
+        COUNTS = {}
+        VERDICT = {}
+        REP_VAR = ["R1_aligned", "R2_aligned", "valid_interactionPairs", "cis_shortRange", "cis_longRange"]
+
+        if os.path.isfile('FitHiChIP.interactions_FitHiC.bed'):
+            with open('FitHiChIP.interactions_FitHiC_Q0.01.bed') as fithichip:
+                LOOPS_SIGNIFICANT = len(fithichip.readlines())-1
+            with open('FitHiChIP.interactions_FitHiC.bed') as fithichip:
+                LOOPS = len(fithichip.readlines())-1
+        if os.path.isfile("~{sampleid_m}fastqpeaks.bed"):
+            with open("~{sampleid_m}fastqpeaks.bed") as peaks:
+                PEAKS = len(peaks.readlines())-1
+
+        PERCENTAGES["R1_aligned"] = round((RESULTS["mapped_R1"]*100)/RESULTS["total_R1"])
+        PERCENTAGES["R2_aligned"] = round((RESULTS["mapped_R2"]*100)/RESULTS["total_R2"])
+        PERCENTAGES["valid_interactionPairs"] = round((RESULTS["valid_interaction"]*100)/RESULTS["Reported_pairs"])
+        PERCENTAGES["cis_shortRange"] = round((RESULTS["cis_shortRange"]*100)/RESULTS["valid_interaction"])
+        PERCENTAGES["cis_longRange"] = round((RESULTS["cis_longRange"]*100)/RESULTS["valid_interaction"])
+        COUNTS["R1_aligned"] = RESULTS["mapped_R1"]
+        COUNTS["R2_aligned"] = RESULTS["mapped_R2"]
+        COUNTS["valid_interactionPairs"] = RESULTS["valid_interaction"]
+        COUNTS["cis_shortRange"] = RESULTS["cis_shortRange"]
+        COUNTS["cis_longRange"] = RESULTS["cis_longRange"]
+
+        for aligned in ["R1_aligned", "R2_aligned"]:
+            if PERCENTAGES[aligned] > 80:
+                VERDICT[aligned] = "GOOD"
+            else:
+                VERDICT[aligned] = "BAD"
+
+        if PERCENTAGES["valid_interactionPairs"] > 50:
+            VERDICT["valid_interactionPairs"] = "GOOD"
+        else:
+            VERDICT["valid_interactionPairs"] = "BAD"
+
+        if PERCENTAGES["cis_shortRange"] > 50:
+            VERDICT["cis_shortRange"] = "BAD"
+        elif PERCENTAGES["cis_shortRange"] > 30:
+            VERDICT["cis_shortRange"] = "MARGINAL"
+        else:
+            VERDICT["cis_shortRange"] = "GOOD"
+
+        if PERCENTAGES["cis_longRange"] > 40:
+            VERDICT["cis_longRange"] = "GOOD"
+        elif PERCENTAGES["cis_longRange"] > 20:
+            VERDICT["cis_longRange"] = "MARGINAL"
+        else:
+            VERDICT["cis_longRange"] = "BAD"
+
+        REPORT = open("~{sampleid_m}QCreport.txt", 'w')
+        REPORT.write("STAT\tCOUNTS\tPERCENTAGE\tVERDICT\n")
+        REPORT.write("Total_pairs_processed\t" + str(RESULTS["Total_pairs_processed"]) + "\n")
+        for var in REP_VAR:
+            REPORT.write(var + "\t" + str(COUNTS[var]) + "\t" + str(PERCENTAGES[var]) + "\t" + VERDICT[var] + '\n')
+
+        if os.path.isfile("~{sampleid_m}fastqpeaks.bed"):
+            REPORT.write("peaks\t" + str(PEAKS) + "\n")
+        if os.path.isfile('FitHiChIP.interactions_FitHiC.bed'):
+            REPORT.write("loops\t" + str(LOOPS) + "\n")
+            REPORT.write("loops_significant\t" + str(LOOPS_SIGNIFICANT) + "\n")
+        CODE
+        cp ~{sampleid_m}QCreport.txt $pwd
+    >>>
+    runtime {
+        memory: memory_gb + " GB"
+        maxRetries: 1
+        docker: 'ghcr.io/stjude/abralab/hilow:v1.0'
+        cpu: 1
+    }
+    output {
+        File qcreport = "~{sampleid_m}QCreport.txt"
     }
 }
