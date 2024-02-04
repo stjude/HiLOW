@@ -768,11 +768,11 @@ task filterblklist {
         pwd=$(pwd)
         tar -xpf ~{hicpro_result}
 
-        all_valid_pairs=$pwd/~{sampleid_m}~{hicpro_out}/hic_results/data/fastq/fastq.allValidPairs
-        orig_valid_pairs=$pwd/~{sampleid_m}~{hicpro_out}/hic_results/data/fastq/fastq.AVP.Orig
+        all_valid_pairs=$pwd/~{hicpro_out}/hic_results/data/fastq/fastq.allValidPairs
+        orig_valid_pairs=$pwd/~{hicpro_out}/hic_results/data/fastq/fastq.AVP.Orig
         mv $all_valid_pairs $orig_valid_pairs
 
-        cd $pwd/~{sampleid_m}~{hicpro_out}/hic_results/data/fastq
+        cd $pwd/~{hicpro_out}/hic_results/data/fastq
 
         if [[ "~{blacklist}" == *"gz" ]]; then
             gunzip -c ~{blacklist} > ~{sub(basename(blacklist),'.gz','')}
@@ -824,8 +824,8 @@ task filterblklist {
         echo -e "$filtered read pairs are filtered out from a total of $all, accounting for ${percentage} %\n"
 
         cd $pwd
-        tar -cpf ~{sampleid_m}~{basename(hicpro_out)}.tar ~{sampleid_m}~{hicpro_out}
-        zip -9qr ~{sampleid_m}~{basename(hicpro_out)}.zip ~{sampleid_m}~{hicpro_out}
+        tar -cpf ~{basename(hicpro_out)}.tar ~{hicpro_out}
+        #zip -9qr ~{basename(hicpro_out)}.zip ~{hicpro_out}
         #rm -rf ~{hicpro_out}
     >>>
 
@@ -836,8 +836,7 @@ task filterblklist {
         cpu: 1
     }
     output {
-        File hicpro_filtered = "~{sampleid_m}~{basename(hicpro_out)}.tar"
-        File hicpro_filtered_zip = "~{sampleid_m}~{basename(hicpro_out)}.zip"
+        File hicpro_filtered = "~{basename(hicpro_out)}.tar"
     }
 }
 
