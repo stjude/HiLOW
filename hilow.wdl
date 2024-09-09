@@ -78,7 +78,7 @@ workflow hilow {
         }
         chromsizes: {
             description: 'Chromosome sizes file in tab delimited format',
-            help: 'If defined, genome chromosome size file.',
+            help: 'If defined, genome chromosome size file.'
         }
         pp_directory: {
             description: 'ProteinPaint directory',
@@ -131,27 +131,25 @@ workflow hilow {
     }
 
     # Generating INDEX files
-    String string_reference = ""
     #1. Bowtie INDEX files if not provided
     if ( !defined(bowtie2index) ) {
         # create bowtie index when not provided
         call bowtie2_index {
             input :
                 genomename=genomename,
-                reference=select_first([reference,string_reference])
+                reference=select_first([reference, ""])
         }
     }
     #2. Make sure indexes are six else build indexes
     if ( defined(bowtie2index) ) {
         # check total number of bowtie indexes provided
-        Array[String] string_bowtie2index = [1] #buffer to allow for bowtie_index optionality
-        Array[File] int_bowtie2index = select_first([bowtie2index, string_bowtie2index])
+        Array[File] int_bowtie2index = select_first([bowtie2index, [""]])
         if ( length(int_bowtie2index) != 6 ) {
             # create bowtie index if 6 index files aren't provided
             call bowtie2_index as bowtie2_index_2 {
                 input :
                     genomename=genomename,
-                    reference=select_first([reference, string_reference])
+                    reference=select_first([reference, ""])
             }
         }
     }
@@ -162,7 +160,7 @@ workflow hilow {
         call chrfaidx {
             # create FASTA index and chrom sizes files
             input :
-                reference=select_first([reference, string_reference])
+                reference=select_first([reference, ""])
         }
     }
     File actual_chromsizes = select_first([chrfaidx.chromsizes, chromsizes])
@@ -171,7 +169,7 @@ workflow hilow {
     if ( defined(geneAnnotation) ){
         call promgeneregion {
             input : 
-                annotation=select_first([geneAnnotation,string_reference])
+                annotation=select_first([geneAnnotation, ""])
         }
     }
 
@@ -195,17 +193,20 @@ workflow hilow {
 
     Array[Pair[File, File]] all_fastqfiles = zip(flatten(validsplit_R1.outputfiles), flatten(validsplit_R2.outputfiles))
 
-    scatter (eachfastq in all_fastqfiles) {
+
+    Array[Int] files = range(length(all_fastqfiles))
+    scatter (i in files) {
         call hicpro_align as step1hicpro {
             input :
                 hicpro_out=hicpro_output,
-                fastqfile_R1=eachfastq.left,
-                fastqfile_R2=eachfastq.right,
+                fastqfile_R1=all_fastqfiles[i].left,
+                fastqfile_R2=all_fastqfiles[i].right,
                 ligationsite=ligationsite,
                 genomefragment=genomefragment,
                 genomename=genomename,
                 chromsizes=actual_chromsizes,
-                bowtie2index=actual_bowtie2_index
+                bowtie2index=actual_bowtie2_index,
+                iteration=i+1
         }
     }
     call hicpro_merge as step2hicpro {
@@ -228,8 +229,7 @@ workflow hilow {
 ### ---------------------------------------- ###
 
     if ( defined(blacklist) ) {
-        String string_blacklist = "" #buffer to allow for blacklist optionality
-        File blacklist_file = select_first([blacklist, string_blacklist])
+        File blacklist_file = select_first([blacklist, ""])
 
         call filterblklist {
             input :
@@ -271,7 +271,6 @@ workflow hilow {
 ### ------------- Peak Calling ------------- ###
 ### ---------------------------------------- ###
 
-    String string_peaks = "" #buffer to allow for not running peaks and looping analysis
     if (ashichip) {
         if ( !defined(loopsAnchor) ){
             call oneDpeaks {
@@ -292,8 +291,8 @@ workflow hilow {
             call activeRegionsMerge {
                 input : 
                     hicpro_out=hicpro_output,
-                    loopBed=select_first([loopsAnchor, oneDpeaks.oneDpeaksbed, string_peaks]),
-                    promoters=select_first([promoters, promgeneregion.promoters, string_peaks]),
+                    loopBed=select_first([loopsAnchor, oneDpeaks.oneDpeaksbed, ""]),
+                    promoters=select_first([promoters, promgeneregion.promoters, ""]),
                     genomename=genomename,
                     hicpro_result=final_hicpro
             }
@@ -310,7 +309,7 @@ workflow hilow {
                 FDR=FDR,
                 hicpro_out=hicpro_output,
                 pp_directory=pp_directory,
-                loopBed=select_first([loopsAnchor, oneDpeaks.oneDpeaksbed, string_peaks]),
+                loopBed=select_first([loopsAnchor, oneDpeaks.oneDpeaksbed, ""]),
                 loopsAnchor=loopsAnchor,
                 hicpro_result=final_hicpro,
                 chromsizes=actual_chromsizes,
@@ -331,7 +330,7 @@ workflow hilow {
                     FDR=FDR,
                     hicpro_out=hicpro_output,
                     pp_directory=pp_directory,
-                    loopBed=select_first([activeRegionsMerge.combined_promoters, string_peaks]),
+                    loopBed=select_first([activeRegionsMerge.combined_promoters, ""]),
                     promoters=select_first([promoters, promgeneregion.promoters]),
                     hicpro_result=final_hicpro,
                     chromsizes=actual_chromsizes,
@@ -350,12 +349,12 @@ workflow hilow {
                     sampleid=sampleid,
                     genomename=genomename,
                     activeregion=true,
-                    qczip = select_first([active_twoDloops.qc_output,string_peaks])
+                    qczip = select_first([active_twoDloops.qc_output, ""])
             }
         }
 
-        File final_pp_peaks = select_first([twoDloops.pp_peaks, twoDloops.pp_peaks2, string_peaks])
-        File final_pp_tbi = select_first([twoDloops.pp_tbi,twoDloops.pp_tbi2, string_peaks])
+        File final_pp_peaks = select_first([twoDloops.pp_peaks, twoDloops.pp_peaks2, ""])
+        File final_pp_tbi = select_first([twoDloops.pp_tbi,twoDloops.pp_tbi2, ""])
 
         call createjson as hichipjson {
             input:
@@ -375,7 +374,7 @@ workflow hilow {
             input:
                 sampleid=sampleid,
                 genomename=genomename,
-                qczip = select_first([twoDloops.qc_output, string_peaks])
+                qczip = select_first([twoDloops.qc_output, ""])
         }
 
     } #end if hichip
@@ -456,31 +455,43 @@ task promgeneregion {
         String outdir = "RegionFiles"
     }
 
-    command <<<
-        if [[ "~{annotation}" == *"gz" ]]; then
-            gunzip -c ~{annotation} > ~{sub(basename(annotation),'.gz','')}
-        else
-           ln -s ~{annotation} ~{sub(basename(annotation),'.gz','')}
-        fi
+    String base = basename(annotation, ".gz")
 
-        sed -i 's/ /\t/g' ~{sub(basename(annotation),'.gz','')}
+    command <<<
+        set -euo pipefail
+        gunzip -c ~{annotation} > ~{base} \
+           || ln -sf ~{annotation} ~{base}
+
+        sed -i 's/ /\t/g' ~{base}
         
         #get promoterregion
         awk -F\\t '{ if($3 == "transcript" && $1 !~ "chrM")
-        if($7 =="+") 
-            print $1 "++" $4-2000 "++" $4+2000 "++" substr($12,2,length($12)-5) "|" substr($10,2,length($10)-3)
-        else if($7=="-")
-            print $1 "++" $5-2000 "++" $5+2000 "++" substr($12,2,length($12)-5) "|" substr($10,2,length($10)-3) }' ~{sub(basename(annotation),'.gz','')} | grep -v "unassigned" | sort | uniq | sed s/\+\+/\\t/g >| aaa
+            if($7 =="+")
+                print $1 "++" $4-2000 "++" $4+2000 "++" substr($12,2,length($12)-5) "|" substr($10,2,length($10)-3)
+            else if($7=="-")
+                print $1 "++" $5-2000 "++" $5+2000 "++" substr($12,2,length($12)-5) "|" substr($10,2,length($10)-3) }' \
+            ~{base} \
+            | grep -v "unassigned" \
+            | sort \
+            | uniq \
+            | sed s/\+\+/\\t/g >| aaa
         
         
         mkdir -p ~{outdir}
-        cat aaa | sort -k1,1 -k2,2n > ~{outdir}/~{output_promoters}; rm -rf aaa
+        sort -k1,1 -k2,2n aaa > ~{outdir}/~{output_promoters}
+            && rm -rf aaa
 
         #get whole gene
         awk -F\\t '{ if($3 == "transcript" && $1 !~ "chrM") 
-        print $1 "++" $4 "++" $5 "++" substr($12,2,length($12)-5) "|" substr($10,2,length($10)-3)}' ~{sub(basename(annotation),'.gz','')} | grep -v "unassigned" | sort | uniq | sed s/\+\+/\\t/g >| aaa
+            print $1 "++" $4 "++" $5 "++" substr($12,2,length($12)-5) "|" substr($10,2,length($10)-3)}' \
+            ~{base} \
+            | grep -v "unassigned" \
+            | sort \
+            | uniq \
+            | sed s/\+\+/\\t/g >| aaa
 
-        cat aaa | sort -k1,1 -k2,2n > ~{outdir}/~{output_generegion}; rm -rf aaa
+        sort -k1,1 -k2,2n aaa > ~{outdir}/~{output_generegion}
+            && rm -rf aaa
     >>>
     runtime {
         memory: "5 GB"
@@ -513,7 +524,7 @@ task fastqsnumber {
             nreads=$(echo "$reads * 1000000" | bc)
         fi
 
-        echo "$count" | bc > totalreads.txt
+        echo "$count" > totalreads.txt
         echo $nreads > nreads.txt
     >>>
 
@@ -589,12 +600,16 @@ task hicpro_align {
         String? ligationsite
         Array[File] bowtie2index
         String hicpro_out = 'HiCProOut'
+        Int iteration = 0
 
         Int ncpu = 4
         Int memory_gb = 5
     }
 
+    File actual_genomefragment = select_first([genomefragment, ""])
+
     command <<<
+        set -euo pipefail
         # Update Config File
         mkdir temp
         pwd=$(pwd)
@@ -606,18 +621,14 @@ task hicpro_align {
         newfastqname_edit="${newfastqname/_R1/}"
 
         # Allow for Genome Fragment to not be specified
-        assignfragment=~{genomefragment}
-        if [[ ${#assignfragment} -ge 1 ]] && [ -f $assignfragment ]; then
-            fragment_filename=${assignfragment##*/}
-            GFragment=$pwd/${fragment_filename%.gz}
-            if [[ "~{genomefragment}" == *"gz" ]]; then
-                gunzip -c ~{genomefragment} > ${fragment_filename%.gz}
-            else
-                ln -s ~{genomefragment} ${fragment_filename%.gz}
-            fi
-            genomefragment=$GFragment; genomefragment="${genomefragment//\//\\/}"
+        if [ -f ~{actual_genomefragment} ]; then
+            fragment_filename=~{basename(actual_genomefragment, ".gz")}
+            GFragment=$pwd/$fragment_filename
+            gunzip -c ~{actual_genomefragment} > $GFragment
+                || ln -sf ~{actual_genomefragment} $GFragment
+            genomefragment=$GFragment
         else
-            genomefragment="";
+            genomefragment=""
         fi
 
         # Allow for Ligation Site to not be specified
@@ -626,28 +637,21 @@ task hicpro_align {
         # Make sure Min_Cis_Dist is set when "Fragments" and "Ligation Sites" are not specified
         if [[ ${#ligationsite} -le 1 ]] && [[ ${#assignfragment} -le 1 ]] ; then
             sed -i "s/MIN_CIS_DIST\ \=/MIN_CIS_DIST\ \=\ 1000/" config-hicpro.txt
-            sed -i "s/Xgenomefragment/${genomefragment}/" config-hicpro.txt
-            sed -i "s/GATCGATC/${ligationsite}/" config-hicpro.txt
-        else
-            sed -i "s/Xgenomefragment/${genomefragment}/" config-hicpro.txt
-            sed -i "s/GATCGATC/${ligationsite}/" config-hicpro.txt
         fi
 
-        index_path=~{bowtie2index[0]}; index_path=${index_path%/*}; index_path="${index_path//\//\\/}"
-        chromsizes=~{chromsizes}; chromsizes="${chromsizes//\//\\/}"
+        sed -i "s#Xgenomefragment#${genomefragment}#;s#GATCGATC#${ligationsite}#" config-hicpro.txt
+
+        index_path=~{bowtie2index[0]}; index_path=${index_path%/*}
 
         # Changes to the config file
-        sed -i "s/Xbowtieindex/${index_path}/" config-hicpro.txt
-        sed -i "s/Xchromsizes/${chromsizes}/" config-hicpro.txt
-        sed -i "s/Xgenome/~{genomename}/" config-hicpro.txt
+        sed -i "s#Xbowtieindex#${index_path}#;s#Xchromsizes#~{chromsizes}#;s#Xgenome#~{genomename}#" config-hicpro.txt
 
         # Copy Files to fastq location
         mkdir -p _split/fastq
-        mv ~{fastqfile_R1} ~{fastqfile_R2} _split/fastq
+        cp ~{fastqfile_R1} ~{fastqfile_R2} _split/fastq
         echo `date`
 
-        getcount=${pwd%/*}
-        newcount=${getcount##*/shard-}
+        newcount=~{iteration}
         echo "this is sleep time $newcount"
 
         sleep $newcount #$(( ( RANDOM % 10 )  + 1 ))
@@ -671,10 +675,12 @@ task hicpro_align {
 
             else
                 echo -e 'hilow error: Can not find valid pairs. Failed to align FASTQs using HiCPro.'
+                exit 1
             fi
 
         else
             echo -e 'hilow error: ~{hicpro_out} folder was not created'
+            exit 1
         fi
     >>>
 
@@ -706,6 +712,7 @@ task hicpro_merge {
         String sampleid_m = if defined(sampleid) then sampleid + '.' + genomename + '_' else ""
     }
 
+    File actual_genomefragment = select_first([genomefragment, ""])
     Int memory_gb = ceil(length(fastqfiles_R1) * 8 ) # memory is times 3 of number of split fastqs (which = <= 90)
     Int int_fastqs = length(fastqfiles_R1) #number of split fastqs
 
@@ -715,18 +722,14 @@ task hicpro_merge {
         cp /data/config-hicpro.txt config-hicpro.txt
 
         # Allow for Genome Fragment to not be specified
-        assignfragment=~{genomefragment}
-        if [[ ${#assignfragment} -ge 1 ]] && [ -f $assignfragment ]; then
-            fragment_filename=${assignfragment##*/}
-            GFragment=$pwd/${fragment_filename%.gz}
-            if [[ "~{genomefragment}" == *"gz" ]]; then
-                gunzip -c ~{genomefragment} > ${fragment_filename%.gz}
-            else
-                ln -s ~{genomefragment} ${fragment_filename%.gz}
-            fi
-            genomefragment=$GFragment; genomefragment="${genomefragment//\//\\/}"
+        if [ -f ~{actual_genomefragment} ]; then
+            fragment_filename=~{basename(actual_genomefragment, ".gz")}
+            GFragment=$pwd/$fragment_filename
+            gunzip -c ~{actual_genomefragment} > $GFragment
+                || ln -sf ~{actual_genomefragment} $GFragment
+            genomefragment=$GFragment
         else
-            genomefragment="";
+            genomefragment=""
         fi
 
         # Allow for Ligation Site to not be specified
@@ -735,20 +738,13 @@ task hicpro_merge {
         # Make sure Min_Cis_Dist is set when "Fragments" and "Ligation Sites" are not specified
         if [[ ${#ligationsite} -le 1 ]] && [[ ${#assignfragment} -le 1 ]] ; then
             sed -i "s/MIN_CIS_DIST\ \=/MIN_CIS_DIST\ \=\ 1000/" config-hicpro.txt
-            sed -i "s/Xgenomefragment/${genomefragment}/" config-hicpro.txt
-            sed -i "s/GATCGATC/${ligationsite}/" config-hicpro.txt
-        else
-            sed -i "s/Xgenomefragment/${genomefragment}/" config-hicpro.txt
-            sed -i "s/GATCGATC/${ligationsite}/" config-hicpro.txt
         fi
-
-        index_path=~{bowtie2index[0]}; index_path=${index_path%/*}; index_path="${index_path//\//\\/}"
-        chromsizes=~{chromsizes}; chromsizes="${chromsizes//\//\\/}"
+        sed -i "s#Xgenomefragment#${genomefragment}#;s#GATCGATC#${ligationsite}#" config-hicpro.txt
+        
+        index_path=~{bowtie2index[0]}; index_path=${index_path%/*}
 
         # Changes to the config file
-        sed -i "s/Xbowtieindex/${index_path}/" config-hicpro.txt
-        sed -i "s/Xchromsizes/${chromsizes}/" config-hicpro.txt
-        sed -i "s/Xgenome/~{genomename}/" config-hicpro.txt
+        sed -i "s#Xbowtieindex#${index_path}#;s#Xchromsizes#~{chromsizes}#;s#Xgenome#~{genomename}#" config-hicpro.txt
 
         # Copy Files to fastq location
         mkdir -p _split/fastq
@@ -820,6 +816,7 @@ task oneDpeaks {
         Int ncpu = 4
     }
 
+    File actual_genomefragment = select_first([genomefragment, ""])
     Int memory_gb = if (count_fastqs < 5) then ceil(5 * 3) else ceil(count_fastqs * 3)
 
     command <<<
@@ -828,18 +825,14 @@ task oneDpeaks {
         tar -xpf ~{hicpro_result}
 
         # Allow for Genome Fragment to not be specified
-        assignfragment=~{genomefragment}
-        if [ -f $assignfragment ]; then
-            fragment_filename=${assignfragment##*/}
-            GFragment=$pwd/${fragment_filename%.gz}
-            if [[ "~{genomefragment}" == *"gz" ]]; then
-                gunzip -c ~{genomefragment} > ${fragment_filename%.gz}
-            else
-                ln -s ~{genomefragment} ${fragment_filename%.gz}
-            fi
-            genomefragment=$GFragment;
+        if [ -f ~{actual_genomefragment} ]; then
+            fragment_filename=~{basename(actual_genomefragment, ".gz")}
+            GFragment=$pwd/$fragment_filename
+            gunzip -c ~{actual_genomefragment} > $GFragment
+                || ln -sf ~{actual_genomefragment} $GFragment
+            genomefragment=$GFragment
         else
-            genomefragment="";
+            genomefragment=""
         fi
 
         echo this is genomefragment $genomefragment
@@ -885,12 +878,14 @@ task filterblklist {
         String hicpro_out = 'HiCProOut'
         String? genomename
         String? sampleid
-        String sampleid_m = if defined(sampleid) then sampleid + '.' + genomename + '_' else ""
+        String sampleid_m = if defined(sampleid) then sampleid + '.' + select_first([genomename, ""]) + '_' else ""
     }
 
     Int memory_gb = ceil((count_fastqs * 3) + 10)
+    String base = basename(blacklist, ".gz")
 
     command <<<
+        set -euo pipefail
         pwd=$(pwd)
         tar -xpf ~{hicpro_result}
 
@@ -900,17 +895,14 @@ task filterblklist {
 
         cd $pwd/~{hicpro_out}/hic_results/data/fastq
 
-        if [[ "~{blacklist}" == *"gz" ]]; then
-            gunzip -c ~{blacklist} > ~{sub(basename(blacklist),'.gz','')}
-        else
-           ln -s ~{blacklist} ~{sub(basename(blacklist),'.gz','')}
-        fi
+        gunzip -c ~{blacklist} > ~{base} \
+           || ln -sf ~{blacklist} ~{base}
 
         #left bed
-        awk -F "\t" -v OFS="\t" '{print $2,$3,$3,$1}' $orig_valid_pairs|slopBed -i stdin -b ~{slop} -g ~{chromsizes}|intersectBed -a stdin -b ~{sub(basename(blacklist),'.gz','')} -u > left.bed
+        awk -F "\t" -v OFS="\t" '{print $2,$3,$3,$1}' $orig_valid_pairs|slopBed -i stdin -b ~{slop} -g ~{chromsizes}|intersectBed -a stdin -b ~{base} -u > left.bed
 
         #right bed
-        awk -F "\t" -v OFS="\t" '{print $5,$6,$6,$1}' $orig_valid_pairs|slopBed -i stdin -b ~{slop} -g ~{chromsizes}|intersectBed -a stdin -b ~{sub(basename(blacklist),'.gz','')} -u >right.bed
+        awk -F "\t" -v OFS="\t" '{print $5,$6,$6,$1}' $orig_valid_pairs|slopBed -i stdin -b ~{slop} -g ~{chromsizes}|intersectBed -a stdin -b ~{base} -u >right.bed
 
 
         cat <(cut -f 4 left.bed) <(cut -f 4 right.bed)|sort -u > filter.pair
@@ -1067,7 +1059,7 @@ task twoDloops {
             LoopDir=$pwd/~{loopOut}/FitHiChIP_Peak2Peak_b5000_L~{LowDistThr}_U~{UppDistThr}/Coverage_Bias/FitHiC_BiasCorr
         else
             echo "Error!! IntType must be 1 (Peak2Peak) or 3 (Peak2All)"
-            exit;
+            exit 1
         fi
 
         cd $LoopDir
@@ -1236,14 +1228,14 @@ task bowtie2_index {
 
         Int memory_gb = 20
     }
-    command <<<
-        if [[ "~{reference}" == *"gz" ]]; then
-            gunzip -c ~{reference} > ~{sub(basename(reference),'.gz','')}
-        else
-           ln -s ~{reference} ~{sub(basename(reference),'.gz','')}
-        fi
 
-        bowtie2-build --threads 20 ~{sub(basename(reference),'.gz','')} ~{genomename}
+    String base = basename(reference, ".gz")
+
+    command <<<
+        gunzip -c ~{reference} > ~{base} \
+           || ln -sf ~{reference} ~{base}
+
+        bowtie2-build --threads 20 ~{base} ~{genomename}
     >>>
     runtime {
         memory: memory_gb + " GB"
@@ -1263,15 +1255,15 @@ task chrfaidx {
 
         Int memory_gb = 5
     }
-    command <<<
-        if [[ "~{reference}" == *"gz" ]]; then
-            gunzip -c ~{reference} > ~{sub(basename(reference),'.gz','')}
-        else
-           ln -s ~{reference} ~{sub(basename(reference),'.gz','')}
-        fi
 
-        samtools faidx ~{sub(basename(reference),'.gz','')} -o ~{sub(basename(reference),'.gz','')}.fai
-        cut -f1,2 ~{sub(basename(reference),'.gz','')}.fai > ~{sub(basename(reference),'.gz','')}.tab
+    String base = basename(reference, ".gz")
+
+    command <<<
+        gunzip -c ~{reference} > ~{base} \
+           || ln -sf ~{reference} ~{base}
+
+        samtools faidx ~{base} -o ~{base}.fai
+        cut -f1,2 ~{base}.fai > ~{base}.tab
     >>>
     runtime {
         memory: memory_gb + " GB"
@@ -1280,8 +1272,8 @@ task chrfaidx {
         cpu: 1
     }
     output {
-        File faidx_file = "~{sub(basename(reference),'.gz','')}.fai"
-        File chromsizes = "~{sub(basename(reference),'.gz','')}.tab"
+        File faidx_file = "~{base}.fai"
+        File chromsizes = "~{base}.tab"
     }
 }
 
