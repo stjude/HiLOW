@@ -624,7 +624,7 @@ task hicpro_align {
         if [ -f ~{actual_genomefragment} ]; then
             fragment_filename=~{basename(actual_genomefragment, ".gz")}
             GFragment=$pwd/$fragment_filename
-            gunzip -c ~{actual_genomefragment} > $GFragment
+            gunzip -c ~{actual_genomefragment} > $GFragment \
                 || ln -sf ~{actual_genomefragment} $GFragment
             genomefragment=$GFragment
         else
@@ -725,7 +725,7 @@ task hicpro_merge {
         if [ -f ~{actual_genomefragment} ]; then
             fragment_filename=~{basename(actual_genomefragment, ".gz")}
             GFragment=$pwd/$fragment_filename
-            gunzip -c ~{actual_genomefragment} > $GFragment
+            gunzip -c ~{actual_genomefragment} > $GFragment \
                 || ln -sf ~{actual_genomefragment} $GFragment
             genomefragment=$GFragment
         else
@@ -828,7 +828,7 @@ task oneDpeaks {
         if [ -f ~{actual_genomefragment} ]; then
             fragment_filename=~{basename(actual_genomefragment, ".gz")}
             GFragment=$pwd/$fragment_filename
-            gunzip -c ~{actual_genomefragment} > $GFragment
+            gunzip -c ~{actual_genomefragment} > $GFragment \
                 || ln -sf ~{actual_genomefragment} $GFragment
             genomefragment=$GFragment
         else
