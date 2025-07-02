@@ -792,7 +792,7 @@ task hicpro_align {
         newcount=~{iteration}
         echo "this is sleep time $newcount"
 
-        # sleep $newcount #$(( ( RANDOM % 10 )  + 1 ))
+        sleep $newcount #$(( ( RANDOM % 10 )  + 1 ))
         # Generating SUB steps
         /HiC-Pro_3.1.0/bin/HiC-Pro -i _split -o ~{hicpro_out} -c config-hicpro.txt -p
 
@@ -927,9 +927,9 @@ task hicpro_merge {
         # Compress Merge Results
         echo `date`
         cd $pwd
-        # rm -rf ${file_array} AAA/~{hicpro_out}
-        # rm -rf ~{basename(hicpro_out)}/bowtie_results
-        # rm -rf ~{basename(hicpro_out)}/rawdata
+        rm -rf ${file_array} AAA/~{hicpro_out}
+        rm -rf ~{basename(hicpro_out)}/bowtie_results
+        rm -rf ~{basename(hicpro_out)}/rawdata
         tar -cpf ~{basename(hicpro_out)}.tar ~{basename(hicpro_out)}
 
         # Export QCfiles
@@ -937,7 +937,7 @@ task hicpro_merge {
         cp HiCPro_out/hic_results/pic/fastq/plot* QCfiles
         cp HiCPro_out/hic_results/stats/fastq/* QCfiles
         zip -9qr QCfiles.zip QCfiles
-        # rm -rf $pwd/~{basename(hicpro_out)}
+        rm -rf $pwd/~{basename(hicpro_out)}
 
     >>>
 
